@@ -35,3 +35,16 @@ Schema changes: edit `src/auth.ts` → `bun run auth:schema` → `bun run db:gen
 
 - [`botcortex`](https://github.com/openhorizon-labs/botcortex) — web app
 - [`botcortex-runtime`](https://github.com/openhorizon-labs/botcortex-runtime) — on-robot runtime
+
+## Deploy (Vercel)
+
+`api/index.ts` is the Vercel entrypoint (**Node.js runtime** — the TCP Postgres
+driver rules out Edge); `vercel.json` rewrites every path to it. Import the repo
+in Vercel and set: `DATABASE_URL` (Supabase pooler URI), `BETTER_AUTH_SECRET`,
+`BETTER_AUTH_URL` (the deployed URL), `TRUSTED_ORIGINS` (app origins).
+
+Provision waitlisted users (no public sign-up UI):
+
+```bash
+DATABASE_URL=… bun scripts/create-user.ts owner@lab.dev 'password' "Name"
+```
