@@ -1,11 +1,13 @@
 /**
- * The entrypoint everywhere: Vercel's Hono backend detection picks up
- * src/index.ts and requires the app as the default export; Bun serves the
- * same export locally (PORT env honored). One artifact, no adapters.
+ * The entrypoint everywhere: Vercel's Hono backend detection requires this
+ * file to import `hono` directly and export the app as default; Bun serves
+ * the same export locally (PORT env honored). One artifact, no adapters.
  */
+import type { Hono } from "hono";
+
 import { auth, trustedOrigins } from "./auth";
 import { createApp } from "./hono";
 
-const app = createApp(auth, trustedOrigins);
+const app: Hono = createApp(auth, trustedOrigins);
 
 export default app;
