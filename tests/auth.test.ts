@@ -12,8 +12,8 @@ import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { drizzle } from "drizzle-orm/pglite";
 
-import { createApp } from "../src/hono";
-import * as schema from "../src/auth-schema";
+import { createApp } from "../src/hono.js";
+import * as schema from "../src/auth-schema.js";
 
 const ORIGIN = "http://localhost:3000";
 let app: ReturnType<typeof createApp>;

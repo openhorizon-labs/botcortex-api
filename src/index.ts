@@ -5,8 +5,8 @@
  */
 import type { Hono } from "hono";
 
-import { auth, trustedOrigins } from "./auth";
-import { createApp } from "./hono";
+import { auth, trustedOrigins } from "./auth.js";
+import { createApp } from "./hono.js";
 
 const app: Hono = createApp(auth, trustedOrigins);
 

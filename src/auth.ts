@@ -7,8 +7,8 @@
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 
-import { db } from "./db";
-import * as schema from "./auth-schema";
+import { db } from "./db.js";
+import * as schema from "./auth-schema.js";
 
 export const trustedOrigins = (
   process.env.TRUSTED_ORIGINS ?? "http://localhost:3000"

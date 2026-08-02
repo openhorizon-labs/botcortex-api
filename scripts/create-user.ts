@@ -4,7 +4,7 @@
  *
  *   DATABASE_URL=… bun scripts/create-user.ts owner@lab.dev 'their-password' "Their Name"
  */
-import { auth } from "../src/auth";
+import { auth } from "../src/auth.js";
 
 const [email, password, ...nameParts] = process.argv.slice(2);
 if (!email || !password) {
