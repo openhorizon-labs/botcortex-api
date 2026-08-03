@@ -20,7 +20,7 @@ import { and, eq, isNull } from "drizzle-orm";
 import { Hono } from "hono";
 
 import type { Db } from "../db.js";
-import { balanceFor, formatMicros, recordUsage } from "../credits.js";
+import { balanceFor, formatMicros, formatMicrosPrecise, recordUsage } from "../credits.js";
 import { keyFromRequest, resolveKey, sha256, type ResolvedKey } from "../keys.js";
 import {
   ALLOWED_MODELS,
@@ -176,7 +176,7 @@ export function robotRoutes(db: Db) {
             message:
               balance.balanceMicros <= 0
                 ? "This account is out of BotCortex credits. Taught skills keep running — only new teaching needs credit."
-                : `Not enough BotCortex credit left to cover another ${body.model} call (${formatMicros(balance.balanceMicros)} remaining, up to ${formatMicros(ceiling)} needed). Taught skills keep running.`,
+                : `Not enough BotCortex credit left to cover another ${body.model} call (${formatMicrosPrecise(balance.balanceMicros)} remaining, up to ${formatMicrosPrecise(ceiling)} needed). Taught skills keep running.`,
           },
         },
         402,
@@ -358,7 +358,9 @@ export function robotRoutes(db: Db) {
       credit: {
         ...balance,
         display: formatMicros(balance.balanceMicros),
-        spentDisplay: formatMicros(balance.spentMicros),
+        // Precise: two decimals would report a real afternoon of teaching
+        // as "$0.00".
+        spentDisplay: formatMicrosPrecise(balance.spentMicros),
       },
       models: ALLOWED_MODELS,
     });

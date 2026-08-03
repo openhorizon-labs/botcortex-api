@@ -4,7 +4,7 @@
  */
 import { expect, test } from "bun:test";
 
-import { SIGNUP_GRANT_MICROS, formatMicros } from "../src/credits.js";
+import { SIGNUP_GRANT_MICROS, formatMicros, formatMicrosPrecise } from "../src/credits.js";
 import {
   ALLOWED_MODELS,
   DEFAULT_MODEL,
@@ -88,14 +88,23 @@ test("the catalogue covers the allowlist exactly", () => {
   expect(catalogue(0).map((m) => m.id).sort()).toEqual([...ALLOWED_MODELS].sort());
 });
 
-test("a balance shows sub-cent movement instead of appearing frozen", () => {
-  // The reported symptom: a teach costs ~2000 micros, so two decimals left
-  // the figure at "$3.00" before and after and the system looked dead.
+test("a balance reads like money — two decimals, always", () => {
   expect(formatMicros(3_000_000)).toBe("$3.00");
-  expect(formatMicros(2_997_827)).toBe("$2.9978");
-  expect(formatMicros(2_173)).toBe("$0.0022");
-  expect(formatMicros(0)).toBe("$0.00");
-  // Round cents keep the familiar shape.
   expect(formatMicros(1_250_000)).toBe("$1.25");
-  expect(formatMicros(2_000_000)).toBe("$2.00");
+  expect(formatMicros(0)).toBe("$0.00");
+  // Sub-cent detail rounds away here by design (Sai's call). The cost is
+  // real — a teach is ~2000 micros, so this ticks only every fifth one —
+  // which is why the precise form exists for anything that would otherwise
+  // read as "nothing was charged".
+  expect(formatMicros(2_997_827)).toBe("$3.00");
+  expect(formatMicros(2_173)).toBe("$0.00");
+});
+
+test("the precise form keeps the part that actually moves", () => {
+  expect(formatMicrosPrecise(2_997_827)).toBe("$2.9978");
+  expect(formatMicrosPrecise(2_173)).toBe("$0.0022");
+  // Round amounts still keep the familiar shape.
+  expect(formatMicrosPrecise(3_000_000)).toBe("$3.00");
+  expect(formatMicrosPrecise(1_250_000)).toBe("$1.25");
+  expect(formatMicrosPrecise(0)).toBe("$0.00");
 });

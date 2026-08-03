@@ -10,7 +10,13 @@ import { Hono } from "hono";
 
 import type { Db } from "../db.js";
 import type { AuthLike } from "../hono.js";
-import { SIGNUP_GRANT_MICROS, balanceFor, formatMicros, grant } from "../credits.js";
+import {
+  SIGNUP_GRANT_MICROS,
+  balanceFor,
+  formatMicros,
+  formatMicrosPrecise,
+  grant,
+} from "../credits.js";
 import { mintKey } from "../keys.js";
 import { generateTitle } from "../titles.js";
 import { ALLOWED_MODELS, DEFAULT_MODEL, catalogue } from "../pricing.js";
@@ -291,7 +297,9 @@ export function accountRoutes(auth: AuthLike, db: Db) {
     return c.json({
       ...balance,
       display: formatMicros(balance.balanceMicros),
-      spentDisplay: formatMicros(balance.spentMicros),
+      // Precise: two decimals would report a real afternoon of
+      // teaching as "$0.00".
+      spentDisplay: formatMicrosPrecise(balance.spentMicros),
       models: ALLOWED_MODELS,
     });
   });

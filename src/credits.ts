@@ -72,17 +72,28 @@ export async function recordUsage(
 }
 
 /**
- * Micro-dollars as a human string.
+ * Micro-dollars as a human string — two decimals, like money (Sai's call).
  *
- * Sub-cent precision is not pedantry here: a whole teach on the cheapest model
- * costs about a fifth of a cent, so at two decimals a balance sits at "$3.00"
- * through hundreds of them. A number that never moves reads as a billing
- * system that is not working — which is exactly how this was reported.
- *
- * Round amounts keep the familiar two decimals; anything with sub-cent detail
- * shows four, so spending is visible as it happens.
+ * The trade is real and worth stating: a teach on the cheapest model costs
+ * about a fifth of a cent, so this figure only ticks after roughly five of
+ * them. A balance that sits still is what got the billing system reported as
+ * broken once already. What makes that survivable now is that the number is no
+ * longer the only evidence — the runtime says which wallet it spends from, an
+ * unpaired robot shows no balance at all, and the precise spend is one hover
+ * away via formatMicrosPrecise.
  */
 export function formatMicros(micros: number): string {
+  return `$${(micros / 1_000_000).toFixed(2)}`;
+}
+
+/**
+ * The same amount without rounding away the part that moves.
+ *
+ * For "used so far" and tooltips, where two decimals would render a real
+ * afternoon of teaching as "$0.00" — a figure that is not merely imprecise
+ * but actively wrong about whether anything was charged.
+ */
+export function formatMicrosPrecise(micros: number): string {
   const dollars = micros / 1_000_000;
   const roundCents = Number.isInteger(Math.round(dollars * 1_000_000) / 10_000);
   return `$${dollars.toFixed(roundCents ? 2 : 4)}`;
