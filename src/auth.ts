@@ -34,7 +34,10 @@ export const plugins = [
   deviceAuthorization({
     expiresIn: "10m",
     interval: "5s",
-    verificationUri: `${appUrl}/device`,
+    // Under /app: every signed-in route lives there, and approving a pairing
+    // requires a session. A robot prints this URL, so a stale path here sends
+    // owners to a redirect at best and a dead link at worst.
+    verificationUri: `${appUrl}/app/device`,
     validateClient: (clientId) => clientId === CLI_CLIENT_ID,
   }),
 ];

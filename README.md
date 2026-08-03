@@ -29,7 +29,7 @@ robot                          api                        owner's browser
   │  POST /v1/device/describe   │  ← names itself for the         │
   │      (auth: device_code)    │    approval screen              │
   │  prints the short code ──────────────────────────────────────►│
-  │  POST /api/auth/device/token│                    GET /device  │
+  │  POST /api/auth/device/token│                    GET /app/device │
   │      … authorization_pending│◄──── binds code to session ─────┤
   │                             │◄──── POST /device/approve ──────┤
   │◄──── access_token (session) │                                 │

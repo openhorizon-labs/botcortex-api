@@ -42,7 +42,7 @@ export async function makeApp() {
       deviceAuthorization({
         expiresIn: "10m",
         interval: "5s",
-        verificationUri: `${ORIGIN}/device`,
+        verificationUri: `${ORIGIN}/app/device`,
         validateClient: (clientId) => clientId === CLI_CLIENT_ID,
       }),
     ],

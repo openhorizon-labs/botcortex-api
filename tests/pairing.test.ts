@@ -54,7 +54,7 @@ test("the verification URI points at the web app, not the api", async () => {
     json({ client_id: CLI_CLIENT_ID }),
   );
   const body = await res.json();
-  expect(body.verification_uri).toBe(`${ORIGIN}/device`);
+  expect(body.verification_uri).toBe(`${ORIGIN}/app/device`);
   expect(body.user_code).toMatch(/^[A-Z0-9-]+$/);
   // The short code is what a human types; it must not be the secret.
   expect(body.user_code).not.toBe(body.device_code);
