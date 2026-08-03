@@ -27,10 +27,21 @@ import {
 import { robot, skill } from "../app-schema.js";
 import { user } from "../auth-schema.js";
 
-const UPSTREAM: Record<Provider, string> = {
+const DEFAULT_UPSTREAM: Record<Provider, string> = {
   openai: "https://api.openai.com/v1/chat/completions",
   anthropic: "https://api.anthropic.com/v1/messages",
 };
+
+/**
+ * Read per-call, not at module load, so a test can stand a stub in front of a
+ * vendor. That is the only way the Anthropic path gets exercised without a
+ * live key — and the header forwarding it depends on breaks silently, since
+ * every OpenAI test passes regardless.
+ */
+function upstreamFor(provider: Provider): string {
+  const override = process.env[`${provider.toUpperCase()}_UPSTREAM_URL`];
+  return override || DEFAULT_UPSTREAM[provider];
+}
 
 const ENV_KEY: Record<Provider, string> = {
   openai: "OPENAI_API_KEY",
@@ -190,7 +201,7 @@ export function robotRoutes(db: Db) {
       );
     }
 
-    const upstream = await fetch(UPSTREAM[provider], {
+    const upstream = await fetch(upstreamFor(provider), {
       method: "POST",
       headers: upstreamHeaders(provider, c.req.raw.headers, secret),
       body: JSON.stringify(body),
