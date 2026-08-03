@@ -16,6 +16,36 @@ Authentication splits cleanly by caller, and the two never mix:
 | `/api/*` | the web app, through its Next rewrite | Better Auth session cookie |
 | `/v1/*` | a runtime on someone's robot | robot key (`bx_live_…`) |
 
+### Pairing (RFC 8628 device flow)
+
+How a robot gets its key without anyone copy-pasting a secret. Better Auth's
+`deviceAuthorization` plugin owns the codes, approval, and token; we add the
+two steps it can't know about.
+
+```
+robot                          api                        owner's browser
+  │  POST /api/auth/device/code │                                 │
+  │◄──── device_code, user_code ┤                                 │
+  │  POST /v1/device/describe   │  ← names itself for the         │
+  │      (auth: device_code)    │    approval screen              │
+  │  prints the short code ──────────────────────────────────────►│
+  │  POST /api/auth/device/token│                    GET /device  │
+  │      … authorization_pending│◄──── binds code to session ─────┤
+  │                             │◄──── POST /device/approve ──────┤
+  │◄──── access_token (session) │                                 │
+  │  POST /v1/keys/exchange     │  ← session becomes a durable    │
+  │◄──── bx_live_…              │    robot key (needs `bearer`)   │
+  │  POST /v1/robots/register   │  ← claims its row, publishes    │
+  │                             │    its LAN address              │
+```
+
+Two details worth keeping: `describe` authenticates with the **secret**
+`device_code`, never the short `user_code` — a guessable code would let an
+attacker plant a misleading name on the approve screen, and naming the device
+is the whole point of asking a human. And the robot row carries our own hash of
+the device code, because Better Auth **deletes** the device code the instant it
+is redeemed, so there is nothing left to join against at registration time.
+
 ### Inference proxy
 
 The authoring agent stays **on the robot**. These routes only let it reach a
@@ -48,7 +78,8 @@ Money is micro-dollars (1e-6 USD) as bigints; floats have no place in a ledger.
 | `src/index.ts` | Bun entrypoint |
 |  `src/hono.ts` | Hono app (createApp): CORS, `/health`, `/api/auth/*` (Better Auth), `/api/me`, then the two route groups |
 | `src/routes/account.ts` | Session-authenticated: mint/list/revoke keys, credit balance |
-| `src/routes/robot.ts` | Key-authenticated: inference proxy, skill sync, `/v1/me` |
+| `src/routes/pairing.ts` | Device pairing: `describe` + key exchange (no key yet, so mounted before the guard) |
+| `src/routes/robot.ts` | Key-authenticated: inference proxy, skill sync, registration, `/v1/me` |
 | `src/pricing.ts` | Model allowlist + per-token prices — the only way a model becomes reachable |
 | `src/credits.ts` | Ledger: balance, grants, usage |
 | `src/keys.ts` | Robot-key minting, SHA-256 hashing, lookup |
@@ -82,7 +113,8 @@ Schema changes: edit `src/auth.ts` → `bun run auth:schema` → `bun run db:gen
 `api/index.ts` is the Vercel entrypoint (**Node.js runtime** — the TCP Postgres
 driver rules out Edge); `vercel.json` rewrites every path to it. Import the repo
 in Vercel and set: `DATABASE_URL` (Supabase pooler URI), `BETTER_AUTH_SECRET`,
-`BETTER_AUTH_URL` (the deployed URL), `TRUSTED_ORIGINS` (app origins), and the
+`BETTER_AUTH_URL` (the deployed URL), `APP_URL` (the web app, where pairing is
+approved), `TRUSTED_ORIGINS` (app origins), and the
 vendor keys the proxy spends — `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`. Those two
 are **ours**; robots authenticate with `bx_live_` keys and never see them. A
 missing one 503s that provider's route and nothing else.

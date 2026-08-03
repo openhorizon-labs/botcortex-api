@@ -11,6 +11,7 @@ import { cors } from "hono/cors";
 
 import type { Db } from "./db.js";
 import { accountRoutes } from "./routes/account.js";
+import { pairingRoutes } from "./routes/pairing.js";
 import { robotRoutes } from "./routes/robot.js";
 
 /** The slice of a Better Auth instance the app actually uses — structural,
@@ -54,8 +55,12 @@ export function createApp(auth: AuthLike, origins: string[], db: Db) {
   // this sub-app's session guard only ever runs for its own paths.
   app.route("/api", accountRoutes(auth, db));
 
-  // No CORS: robots are not browsers, and nothing here should be reachable
-  // from a page's fetch carrying ambient credentials.
+  // No CORS on /v1: robots are not browsers, and nothing here should be
+  // reachable from a page's fetch carrying ambient credentials.
+  //
+  // Pairing goes FIRST: a robot mid-pairing has no key yet, so these routes
+  // must resolve before robotRoutes' key guard can reject them.
+  app.route("/v1", pairingRoutes(auth, db));
   app.route("/v1", robotRoutes(db));
 
   return app;

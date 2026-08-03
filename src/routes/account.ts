@@ -13,7 +13,7 @@ import type { AuthLike } from "../hono.js";
 import { SIGNUP_GRANT_MICROS, balanceFor, formatMicros, grant } from "../credits.js";
 import { mintKey } from "../keys.js";
 import { ALLOWED_MODELS } from "../pricing.js";
-import { robotKey } from "../app-schema.js";
+import { robot, robotKey } from "../app-schema.js";
 
 type Env = { Variables: { userId: string } };
 
@@ -75,6 +75,36 @@ export function accountRoutes(auth: AuthLike, db: Db) {
       .returning();
     if (result.length === 0) return c.json({ error: "not found" }, 404);
     return c.json({ ok: true });
+  });
+
+  /** The robots this owner has paired — what the sidebar picker renders. */
+  app.get("/robots", async (c) => {
+    const robots = await db
+      .select({
+        id: robot.id,
+        name: robot.name,
+        platform: robot.platform,
+        arms: robot.arms,
+        address: robot.address,
+        lastSeenAt: robot.lastSeenAt,
+      })
+      .from(robot)
+      .where(eq(robot.userId, c.get("userId")))
+      .orderBy(desc(robot.lastSeenAt));
+    return c.json({ robots });
+  });
+
+  /** What is asking to be paired, for the approval screen. Returns the name
+   *  the robot gave itself — "approve thor-rig", not "approve some device". */
+  app.get("/device/pending", async (c) => {
+    const userCode = c.req.query("user_code");
+    if (!userCode) return c.json({ error: "user_code is required" }, 400);
+    const [pending] = await db
+      .select({ name: robot.name, platform: robot.platform, arms: robot.arms })
+      .from(robot)
+      .where(eq(robot.userCode, userCode))
+      .limit(1);
+    return c.json({ robot: pending ?? null });
   });
 
   app.get("/credits", async (c) => {

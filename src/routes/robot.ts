@@ -11,14 +11,14 @@
  *   POST /v1/skills             skill sync
  *   GET  /v1/me                 who this key belongs to + remaining credit
  */
-import { eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { Hono } from "hono";
 
 import type { Db } from "../db.js";
 import { balanceFor, formatMicros, recordUsage } from "../credits.js";
-import { keyFromRequest, resolveKey, type ResolvedKey } from "../keys.js";
+import { keyFromRequest, resolveKey, sha256, type ResolvedKey } from "../keys.js";
 import { ALLOWED_MODELS, costMicros, priceFor, type Provider } from "../pricing.js";
-import { skill } from "../app-schema.js";
+import { robot, skill } from "../app-schema.js";
 import { user } from "../auth-schema.js";
 
 const UPSTREAM: Record<Provider, string> = {
@@ -243,6 +243,60 @@ export function robotRoutes(db: Db) {
       });
 
     return c.json({ ok: true, name });
+  });
+
+  /**
+   * The robot claims the row it described during pairing, or announces itself
+   * on later boots. Address is the LAN WebSocket the web app dials — which is
+   * what lets the app list robots instead of asking the owner to type a host.
+   *
+   * Same-LAN only by design: reaching a robot from another network is the
+   * relay's job, and pairing does not pretend to solve it.
+   */
+  app.post("/robots/register", async (c) => {
+    const key = c.get("key");
+    const body = await c.req.json().catch(() => null);
+    const { device_code: code, name, platform, arms, address } = body ?? {};
+    if (typeof name !== "string" || typeof platform !== "string") {
+      return c.json({ error: "name and platform are required" }, 400);
+    }
+
+    const fields = {
+      userId: key.userId,
+      keyId: key.id,
+      name,
+      platform,
+      arms: Number.isFinite(arms) ? Number(arms) : 2,
+      address: typeof address === "string" ? address : null,
+      lastSeenAt: new Date(),
+      userCode: null,
+    };
+
+    // Claim the row described during pairing, if this registration is the tail
+    // of a fresh pair; otherwise fall through to upsert by (owner, name).
+    //
+    // Matched on OUR hash of the device code, not the device_code table: Better
+    // Auth deletes that row the instant the token is redeemed, so by the time a
+    // robot registers there is nothing left to join against.
+    if (typeof code === "string") {
+      const claimed = await db
+        .update(robot)
+        .set({ ...fields, deviceCodeHash: null })
+        .where(and(eq(robot.deviceCodeHash, await sha256(code)), isNull(robot.userId)))
+        .returning();
+      if (claimed.length > 0) return c.json({ ok: true, id: claimed[0].id });
+    }
+
+    const [row] = await db
+      .insert(robot)
+      .values({ id: crypto.randomUUID(), ...fields })
+      .onConflictDoUpdate({
+        target: [robot.userId, robot.name],
+        set: { keyId: fields.keyId, platform, arms: fields.arms, address: fields.address, lastSeenAt: fields.lastSeenAt },
+      })
+      .returning();
+
+    return c.json({ ok: true, id: row?.id });
   });
 
   app.get("/me", async (c) => {

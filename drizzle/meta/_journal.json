@@ -15,6 +15,20 @@
       "when": 1785768137096,
       "tag": "0001_solid_stryfe",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1785770570456,
+      "tag": "0002_long_microchip",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1785770909176,
+      "tag": "0003_ancient_rhino",
+      "breakpoints": true
     }
   ]
 }

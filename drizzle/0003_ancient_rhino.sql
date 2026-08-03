@@ -1,0 +1,1 @@
+ALTER TABLE "robot" ADD COLUMN "device_code_hash" text;

@@ -113,6 +113,56 @@ export const skill = pgTable(
   (t) => [uniqueIndex("skill_user_name_idx").on(t.userId, t.name)],
 );
 
+/**
+ * A robot paired to an account.
+ *
+ * A row is born UNPAIRED during the device flow: the runtime describes itself
+ * (name, platform, arms) against its secret device_code, so the approval screen
+ * can say "Approve thor-rig (OpenArm v1)" instead of "approve unknown device".
+ * That naming is the entire security value of the confirmation step, which is
+ * why describe is authenticated by the unguessable device_code and not the
+ * short user_code a shoulder-surfer could read.
+ *
+ * On registration the row gains its owner and key, and `userCode` is cleared.
+ * The unique index only bites once `userId` is set — Postgres treats NULLs as
+ * distinct — so half-finished pairings never collide with each other.
+ */
+export const robot = pgTable(
+  "robot",
+  {
+    id: text("id").primaryKey(),
+    /** Null until the pairing is approved and the robot registers. */
+    userId: text("user_id").references(() => user.id, { onDelete: "cascade" }),
+    /** Set during pairing so the approval page can find this row; cleared after. */
+    userCode: text("user_code"),
+    /**
+     * SHA-256 of the device code, written at describe time and used by the
+     * robot to claim this row after approval. We keep our own copy because
+     * Better Auth DELETES the device code the moment it is redeemed (correct
+     * single-use behaviour) — so by registration time there is nothing left
+     * to join against. Hashed, not raw: it is a claim credential.
+     */
+    deviceCodeHash: text("device_code_hash"),
+    name: text("name").notNull(),
+    platform: text("platform").notNull(),
+    arms: integer("arms").notNull().default(2),
+    /** Last known LAN address for the web app's WebSocket, e.g. 192.168.1.42:9090. */
+    address: text("address"),
+    keyId: text("key_id").references(() => robotKey.id, { onDelete: "set null" }),
+    lastSeenAt: timestamp("last_seen_at"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("robot_user_name_idx").on(t.userId, t.name),
+    index("robot_user_code_idx").on(t.userCode),
+  ],
+);
+
+export const robotRelations = relations(robot, ({ one }) => ({
+  user: one(user, { fields: [robot.userId], references: [user.id] }),
+  key: one(robotKey, { fields: [robot.keyId], references: [robotKey.id] }),
+}));
+
 export const robotKeyRelations = relations(robotKey, ({ one }) => ({
   user: one(user, { fields: [robotKey.userId], references: [user.id] }),
 }));

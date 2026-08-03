@@ -9,8 +9,10 @@ import { join } from "node:path";
 import { PGlite } from "@electric-sql/pglite";
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
+import { bearer, deviceAuthorization } from "better-auth/plugins";
 import { drizzle } from "drizzle-orm/pglite";
 
+import { CLI_CLIENT_ID } from "../src/client.js";
 import { createApp } from "../src/hono.js";
 import * as schema from "../src/schema.js";
 
@@ -33,6 +35,17 @@ export async function makeApp() {
     trustedOrigins: [ORIGIN],
     secret: "test-secret-at-least-32-characters-long",
     baseURL: "http://localhost:8787",
+    // The same plugins production runs — a pairing test against an auth
+    // instance without them would prove nothing about the real flow.
+    plugins: [
+      bearer(),
+      deviceAuthorization({
+        expiresIn: "10m",
+        interval: "5s",
+        verificationUri: `${ORIGIN}/device`,
+        validateClient: (clientId) => clientId === CLI_CLIENT_ID,
+      }),
+    ],
   });
   return { app: createApp(auth, [ORIGIN], db), db };
 }
