@@ -18,6 +18,9 @@ import { conversation, message, robot, robotKey } from "../app-schema.js";
 
 type Env = { Variables: { userId: string } };
 
+/** Roughly a long authored skill plus its arguments. */
+const MAX_PAYLOAD_CHARS = 24_000;
+
 export function accountRoutes(auth: AuthLike, db: Db) {
   const app = new Hono<Env>();
 
@@ -117,7 +120,10 @@ export function accountRoutes(auth: AuthLike, db: Db) {
         id: conversation.id,
         title: conversation.title,
         updatedAt: conversation.updatedAt,
-        messages: sql<number>`count(${message.id})`,
+        // Only real messages decide whether a task is worth listing. Tool
+        // rows are machinery — a task showing nothing but the agent's
+        // workings has nothing for an owner to recognise it by.
+        messages: sql<number>`count(*) filter (where ${message.kind} = 'text')`,
       })
       .from(conversation)
       .leftJoin(message, eq(message.conversationId, conversation.id))
@@ -168,7 +174,9 @@ export function accountRoutes(auth: AuthLike, db: Db) {
       .select({
         id: message.id,
         author: message.author,
+        kind: message.kind,
         text: message.text,
+        payload: message.payload,
         createdAt: message.createdAt,
       })
       .from(message)
@@ -185,12 +193,22 @@ export function accountRoutes(auth: AuthLike, db: Db) {
   app.post("/messages", async (c) => {
     const userId = c.get("userId");
     const body = await c.req.json().catch(() => null);
-    const { id, author, text, robotName, conversationId } = body ?? {};
+    const { id, author, text, robotName, conversationId, kind, payload } = body ?? {};
     if (typeof id !== "string" || typeof text !== "string" || typeof conversationId !== "string") {
       return c.json({ error: "id, text and conversationId are required" }, 400);
     }
     if (author !== "you" && author !== "robot") {
       return c.json({ error: "author must be 'you' or 'robot'" }, 400);
+    }
+    const rowKind = kind === "tool" ? "tool" : "text";
+    if (rowKind === "tool" && (!payload || typeof payload !== "object")) {
+      return c.json({ error: "a tool row needs a payload" }, 400);
+    }
+    // A runaway tool result must not be able to bloat a row. The runtime
+    // already previews results at 500 chars; this is the backstop for
+    // arguments, where an authored skill legitimately runs to a few KB.
+    if (rowKind === "tool" && JSON.stringify(payload).length > MAX_PAYLOAD_CHARS) {
+      return c.json({ error: "tool payload too large" }, 413);
     }
 
     const [owned] = await db
@@ -200,18 +218,21 @@ export function accountRoutes(auth: AuthLike, db: Db) {
       .limit(1);
     if (!owned) return c.json({ error: "no such conversation" }, 404);
 
-    await db
+    const inserted = await db
       .insert(message)
       .values({
         id,
         conversationId,
         userId,
         author,
+        kind: rowKind,
         text,
+        payload: rowKind === "tool" ? payload : null,
         robotName: typeof robotName === "string" ? robotName : null,
       })
       // Idempotent: a retried or replayed POST must not double the transcript.
-      .onConflictDoNothing({ target: message.id });
+      .onConflictDoNothing({ target: message.id })
+      .returning();
 
     await db
       .update(conversation)
@@ -225,7 +246,7 @@ export function accountRoutes(auth: AuthLike, db: Db) {
     // concurrently, both read title=null, and whichever UPDATE lands last
     // wins — so the robot's reply blanked the title the user's message had
     // just set. `where title is null` lets exactly one writer take it.
-    if (author === "you") {
+    if (author === "you" && rowKind === "text") {
       const fallback = text.slice(0, 40);
       const claimed = await db
         .update(conversation)
@@ -247,7 +268,10 @@ export function accountRoutes(auth: AuthLike, db: Db) {
       }
     }
 
-    return c.json({ ok: true });
+    // `stored` distinguishes "written" from "already had that id". Replying
+    // ok:true either way hid a client bug for an hour — every POST looked
+    // accepted while most were quietly doing nothing.
+    return c.json({ ok: true, stored: inserted.length > 0 });
   });
 
   /** The model picker's data — ids, labels, real per-token prices, and

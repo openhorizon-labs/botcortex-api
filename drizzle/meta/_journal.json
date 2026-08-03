@@ -43,6 +43,13 @@
       "when": 1785776203891,
       "tag": "0005_slippery_proudstar",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1785784106244,
+      "tag": "0006_zippy_silverclaw",
+      "breakpoints": true
     }
   ]
 }

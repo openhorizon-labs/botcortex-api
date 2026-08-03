@@ -167,3 +167,80 @@ test("a robot reply cannot blank the title the owner's message just set", async 
   const thread = (await listConversations()).find((t) => t.id === id)!;
   expect(thread.title).toBe("pick up the blue cube");
 });
+
+test("a tool call is stored in the transcript, in order, with its detail", async () => {
+  const id = await newConversation();
+  await say(id, "you", "teach it to wave");
+  await json("/api/messages", {
+    id: crypto.randomUUID(),
+    conversationId: id,
+    author: "robot",
+    kind: "tool",
+    text: 'Writing "wave_right_arm"',
+    payload: {
+      name: "save_skill",
+      input: { name: "wave_right_arm", code: "META = {...}\ndef run(ctx): pass" },
+      result: "saved wave_right_arm",
+      ok: true,
+    },
+  }, cookie);
+  await say(id, "robot", "The right arm waved gently twice.");
+
+  const history = await readMessages(id);
+  expect(history.map((m: any) => m.kind)).toEqual(["text", "tool", "text"]);
+  const tool = history[1] as any;
+  // The authored code is the point of keeping this at all.
+  expect(tool.payload.input.code).toContain("def run(ctx)");
+  expect(tool.payload.ok).toBe(true);
+});
+
+test("a tool row does not steal the conversation title", async () => {
+  const id = await newConversation();
+  await json("/api/messages", {
+    id: crypto.randomUUID(),
+    conversationId: id,
+    author: "robot",
+    kind: "tool",
+    text: "Checking what it already knows",
+    payload: { name: "list_skills", input: {}, ok: true },
+  }, cookie);
+  expect((await listConversations()).find((t) => t.id === id)).toBeUndefined();
+
+  await say(id, "you", "now teach it something");
+  expect((await listConversations()).find((t) => t.id === id)!.title).toBe(
+    "now teach it something",
+  );
+});
+
+test("a tool row without a payload is refused", async () => {
+  const id = await newConversation();
+  const res = await json("/api/messages", {
+    id: crypto.randomUUID(),
+    conversationId: id,
+    author: "robot",
+    kind: "tool",
+    text: "nope",
+  }, cookie);
+  expect(res.status).toBe(400);
+});
+
+test("a runaway payload is refused rather than stored", async () => {
+  const id = await newConversation();
+  const res = await json("/api/messages", {
+    id: crypto.randomUUID(),
+    conversationId: id,
+    author: "robot",
+    kind: "tool",
+    text: "huge",
+    payload: { name: "save_skill", input: { code: "x".repeat(30_000) } },
+  }, cookie);
+  expect(res.status).toBe(413);
+});
+
+test("ordinary messages are unaffected and default to text", async () => {
+  const id = await newConversation();
+  await say(id, "you", "just words");
+  const [only] = await readMessages(id);
+  expect((only as any).kind).toBe("text");
+  expect((only as any).payload).toBeNull();
+});

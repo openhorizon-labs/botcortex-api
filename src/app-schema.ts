@@ -14,6 +14,7 @@ import {
   bigserial,
   index,
   integer,
+  jsonb,
   pgTable,
   text,
   timestamp,
@@ -230,7 +231,20 @@ export const message = pgTable(
     robotName: text("robot_name"),
     /** "you" | "robot" — mirrors the app's ChatMessage. */
     author: text("author").notNull(),
+    /**
+     * "text" | "tool". A tool row is one reach into the runtime — reading
+     * joints, writing a skill, running it — kept so reopening a task shows
+     * HOW a skill was authored, not just that it was.
+     *
+     * A column on `message` rather than a table of its own: traces then
+     * inherit `seq`, so the transcript is one ordered query instead of two
+     * lists merged on a timestamp.
+     */
+    kind: text("kind").notNull().default("text"),
+    /** Human label for a tool row; the message itself for a text row. */
     text: text("text").notNull(),
+    /** Tool detail: {name, input, result, ok}. Null for ordinary messages. */
+    payload: jsonb("payload"),
     createdAt: timestamp("created_at").notNull().defaultNow(),
   },
   (t) => [index("message_convo_idx").on(t.conversationId, t.seq)],
