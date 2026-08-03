@@ -71,7 +71,19 @@ export async function recordUsage(
   await db.insert(usage).values({ id: crypto.randomUUID(), ...row });
 }
 
-/** Micro-dollars as a human string: 1_234_567 → "$1.23". */
+/**
+ * Micro-dollars as a human string.
+ *
+ * Sub-cent precision is not pedantry here: a whole teach on the cheapest model
+ * costs about a fifth of a cent, so at two decimals a balance sits at "$3.00"
+ * through hundreds of them. A number that never moves reads as a billing
+ * system that is not working — which is exactly how this was reported.
+ *
+ * Round amounts keep the familiar two decimals; anything with sub-cent detail
+ * shows four, so spending is visible as it happens.
+ */
 export function formatMicros(micros: number): string {
-  return `$${(micros / 1_000_000).toFixed(2)}`;
+  const dollars = micros / 1_000_000;
+  const roundCents = Number.isInteger(Math.round(dollars * 1_000_000) / 10_000);
+  return `$${dollars.toFixed(roundCents ? 2 : 4)}`;
 }

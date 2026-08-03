@@ -355,7 +355,11 @@ export function robotRoutes(db: Db) {
     const balance = await balanceFor(db, key.userId);
     return c.json({
       user: owner ?? null,
-      credit: { ...balance, display: formatMicros(balance.balanceMicros) },
+      credit: {
+        ...balance,
+        display: formatMicros(balance.balanceMicros),
+        spentDisplay: formatMicros(balance.spentMicros),
+      },
       models: ALLOWED_MODELS,
     });
   });

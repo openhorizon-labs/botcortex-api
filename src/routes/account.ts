@@ -291,6 +291,7 @@ export function accountRoutes(auth: AuthLike, db: Db) {
     return c.json({
       ...balance,
       display: formatMicros(balance.balanceMicros),
+      spentDisplay: formatMicros(balance.spentMicros),
       models: ALLOWED_MODELS,
     });
   });
