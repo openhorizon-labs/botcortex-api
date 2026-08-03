@@ -60,7 +60,7 @@ type Env = { Variables: { key: ResolvedKey } };
  *  Anthropic reports cached tokens separately; we fold them into input at
  *  full rate — a small overcharge on cache hits, and the honest direction to
  *  err while this is a preview. Revisit if prompt caching gets heavy use. */
-function tokensFrom(data: any, provider: Provider) {
+export function tokensFrom(data: any, provider: Provider) {
   const u = data?.usage ?? {};
   if (provider === "openai") {
     return {
@@ -77,7 +77,11 @@ function tokensFrom(data: any, provider: Provider) {
   };
 }
 
-function upstreamHeaders(provider: Provider, incoming: Headers, secret: string): Headers {
+export function upstreamHeaders(
+  provider: Provider,
+  incoming: Headers,
+  secret: string,
+): Headers {
   const headers = new Headers({ "content-type": "application/json" });
   if (provider === "openai") {
     headers.set("authorization", `Bearer ${secret}`);

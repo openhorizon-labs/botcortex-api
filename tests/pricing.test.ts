@@ -46,8 +46,9 @@ test("the documented prices are the ones we charge", () => {
   // with gpt-5.5 independently confirmed on openai.com.
   expect(costMicros(priceFor("gpt-5.5")!, 1_000_000, 0)).toBe(5_000_000);
   expect(costMicros(priceFor("gpt-5.5")!, 0, 1_000_000)).toBe(30_000_000);
-  expect(costMicros(priceFor("gpt-4.1")!, 1_000_000, 1_000_000)).toBe(10_000_000);
   expect(costMicros(priceFor("gpt-5-nano")!, 1_000_000, 0)).toBe(50_000);
+  expect(costMicros(priceFor("gpt-5-nano")!, 0, 1_000_000)).toBe(400_000);
+  expect(costMicros(priceFor("gpt-5.6-terra")!, 1_000_000, 1_000_000)).toBe(14_000_000);
 });
 
 test("the default model is affordable on the signup grant", () => {
@@ -55,17 +56,28 @@ test("the default model is affordable on the signup grant", () => {
   expect(Math.floor(SIGNUP_GRANT_MICROS / needed)).toBeGreaterThanOrEqual(10);
 });
 
-test("models the balance cannot cover are flagged, not left to 402", () => {
-  // The cliff: gpt-5.5-pro's worst case is near the whole signup grant, so a
-  // new owner picking it would be refused on their first sentence. The picker
-  // has to be able to say so BEFORE they choose.
+test("the signup grant covers every model we sell", () => {
+  // The point of a six-model lineup: nothing on it is a trap for a new owner.
+  // Add a pro-tier row and this fails, which is the warning worth having.
   const onSignup = catalogue(SIGNUP_GRANT_MICROS);
-  const pro = onSignup.find((m) => m.id === "gpt-5.5-pro")!;
-  const cheap = onSignup.find((m) => m.id === DEFAULT_MODEL)!;
+  expect(onSignup.every((m) => m.affordable)).toBe(true);
+});
 
-  expect(pro.neededMicros).toBeGreaterThan(cheap.neededMicros * 5);
-  expect(cheap.affordable).toBe(true);
-  expect(onSignup.some((m) => !m.affordable)).toBe(true);
+test("a nearly-empty balance flags what it cannot cover, before the 402", () => {
+  const nearlyEmpty = catalogue(20_000); // $0.02
+  const dearest = nearlyEmpty.find((m) => m.id === "gpt-5.6-sol")!;
+  const cheapest = nearlyEmpty.find((m) => m.id === "gpt-5-nano")!;
+
+  expect(dearest.affordable).toBe(false);
+  expect(cheapest.affordable).toBe(true);
+  expect(dearest.neededMicros).toBeGreaterThan(cheapest.neededMicros * 10);
+});
+
+test("every model is tiered and carries a reason to pick it", () => {
+  for (const m of catalogue(0)) {
+    expect(["top", "fast"]).toContain(m.tier);
+    expect(m.note.length).toBeGreaterThan(0);
+  }
 });
 
 test("an empty balance can afford nothing, and says so for every model", () => {

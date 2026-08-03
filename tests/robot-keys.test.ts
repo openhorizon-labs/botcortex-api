@@ -142,13 +142,13 @@ test("an unpriced model is refused rather than forwarded unmetered", async () =>
 });
 
 test("a model routed to the wrong provider's endpoint is refused", async () => {
-  const res = await app.request("/v1/chat/completions", {
+  const res = await app.request("/v1/messages", {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
-    body: JSON.stringify({ model: "claude-opus-5", messages: [] }),
+    body: JSON.stringify({ model: "gpt-5-nano", messages: [] }),
   });
   expect(res.status).toBe(400);
-  expect((await res.json()).error.message).toContain("anthropic model");
+  expect((await res.json()).error.message).toContain("openai model");
 });
 
 test("an exhausted balance gets a 402 before anything is forwarded", async () => {
@@ -174,7 +174,7 @@ test("an exhausted balance gets a 402 before anything is forwarded", async () =>
     id: crypto.randomUUID(),
     userId: freshUserId,
     keyId: null,
-    model: "gpt-4.1",
+    model: "gpt-5-nano",
     inputTokens: 1_000_000,
     outputTokens: 0,
     costMicros: SIGNUP_GRANT_MICROS,
@@ -183,7 +183,7 @@ test("an exhausted balance gets a 402 before anything is forwarded", async () =>
   const spend = await fresh.request("/v1/chat/completions", {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${freshKey}` },
-    body: JSON.stringify({ model: "gpt-4.1", messages: [] }),
+    body: JSON.stringify({ model: "gpt-5-nano", messages: [] }),
   });
   expect(spend.status).toBe(402);
   expect((await spend.json()).error.type).toBe("insufficient_credit");
@@ -241,7 +241,7 @@ test("a balance too small to cover one call is refused before forwarding", async
     id: crypto.randomUUID(),
     userId: freshUserId,
     keyId: null,
-    model: "gpt-4.1",
+    model: "gpt-5-nano",
     inputTokens: 0,
     outputTokens: 0,
     costMicros: SIGNUP_GRANT_MICROS - 10,
@@ -250,7 +250,7 @@ test("a balance too small to cover one call is refused before forwarding", async
   const res = await fresh.request("/v1/chat/completions", {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${freshKey}` },
-    body: JSON.stringify({ model: "gpt-4.1", messages: [] }),
+    body: JSON.stringify({ model: "gpt-5-nano", messages: [] }),
   });
   expect(res.status).toBe(402);
   const { error } = await res.json();
@@ -260,15 +260,15 @@ test("a balance too small to cover one call is refused before forwarding", async
 });
 
 test("the ceiling scales with the model, and max_tokens is trusted", () => {
-  const cheap = worstCaseMicros(priceFor("gpt-4.1-mini")!);
-  const dear = worstCaseMicros(priceFor("claude-opus-5")!);
+  const cheap = worstCaseMicros(priceFor("gpt-5-nano")!);
+  const dear = worstCaseMicros(priceFor("gpt-5.6-sol")!);
   expect(dear).toBeGreaterThan(cheap);
 
   // A caller naming a smaller budget should not be held to the assumed one.
-  const bounded = worstCaseMicros(priceFor("gpt-4.1")!, 100);
-  expect(bounded).toBeLessThan(worstCaseMicros(priceFor("gpt-4.1")!));
+  const bounded = worstCaseMicros(priceFor("gpt-5.6-sol")!, 100);
+  expect(bounded).toBeLessThan(dear);
 
-  // The signup grant must still buy a useful number of calls, or a new owner
-  // hits a 402 before learning anything.
-  expect(Math.floor(SIGNUP_GRANT_MICROS / worstCaseMicros(priceFor("gpt-4.1")!))).toBeGreaterThanOrEqual(10);
+  // Even the dearest model we sell must buy several teaches on the signup
+  // grant, or the lineup itself is a trap for a new owner.
+  expect(Math.floor(SIGNUP_GRANT_MICROS / dear)).toBeGreaterThanOrEqual(5);
 });

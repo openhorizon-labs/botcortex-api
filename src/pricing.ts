@@ -14,8 +14,6 @@
  * gpt-5.5 was spot-checked against openai.com independently and matched.
  * Re-verify against that page before trusting these with real money.
  *
- * Anthropic prices come from the claude-api skill's model table.
- *
  * We charge these through at cost — no markup — so any later margin decision
  * is a deliberate edit here rather than a hidden one.
  */
@@ -29,55 +27,59 @@ export interface ModelPrice {
   label: string;
   /** Family heading in the picker. */
   family: string;
+  /** Which icon the picker draws. */
+  tier: "top" | "fast";
+  /** One line on why an owner would pick it. */
+  note: string;
 }
 
 const M = 1_000_000;
 
 export const MODELS: Record<string, ModelPrice> = {
-  // ---- OpenAI, current lineup. Dated snapshots (gpt-5.4-2026-03-05), codex
-  // variants, and legacy 3.5 are deliberately absent: nobody teaching a robot
-  // picks those, and every extra row is another price to keep honest.
-  "gpt-5.6-sol": { provider: "openai", inputPerMTok: 5 * M, outputPerMTok: 30 * M, label: "GPT-5.6 Sol", family: "GPT-5.6" },
-  "gpt-5.6-terra": { provider: "openai", inputPerMTok: 2 * M, outputPerMTok: 12 * M, label: "GPT-5.6 Terra", family: "GPT-5.6" },
-  "gpt-5.6-luna": { provider: "openai", inputPerMTok: 0.2 * M, outputPerMTok: 1.2 * M, label: "GPT-5.6 Luna", family: "GPT-5.6" },
+  // Six, not twenty-seven. A robot owner picking a brain wants "best" or
+  // "cheap", not a catalogue — and every extra row is another price we have to
+  // keep honest against OpenAI's page.
+  //
+  // GPT only. Claude is deliberately absent: BYO-key users reach Anthropic
+  // directly without touching this table, so pricing it here would only sell
+  // something nobody asked us to sell. Re-adding it is one row.
+  "gpt-5.6-sol": {
+    provider: "openai", inputPerMTok: 5 * M, outputPerMTok: 30 * M,
+    label: "GPT-5.6 Sol", family: "Most capable", tier: "top",
+    note: "Best at hard, multi-step tasks",
+  },
+  "gpt-5.5": {
+    provider: "openai", inputPerMTok: 5 * M, outputPerMTok: 30 * M,
+    label: "GPT-5.5", family: "Most capable", tier: "top",
+    note: "Proven flagship",
+  },
+  "gpt-5.6-terra": {
+    provider: "openai", inputPerMTok: 2 * M, outputPerMTok: 12 * M,
+    label: "GPT-5.6 Terra", family: "Most capable", tier: "top",
+    note: "Strong, less costly",
+  },
 
-  "gpt-5.5": { provider: "openai", inputPerMTok: 5 * M, outputPerMTok: 30 * M, label: "GPT-5.5", family: "GPT-5.5" },
-  "gpt-5.5-pro": { provider: "openai", inputPerMTok: 30 * M, outputPerMTok: 180 * M, label: "GPT-5.5 Pro", family: "GPT-5.5" },
-
-  "gpt-5.4": { provider: "openai", inputPerMTok: 2.5 * M, outputPerMTok: 15 * M, label: "GPT-5.4", family: "GPT-5.4" },
-  "gpt-5.4-mini": { provider: "openai", inputPerMTok: 0.75 * M, outputPerMTok: 4.5 * M, label: "GPT-5.4 mini", family: "GPT-5.4" },
-  "gpt-5.4-nano": { provider: "openai", inputPerMTok: 0.2 * M, outputPerMTok: 1.25 * M, label: "GPT-5.4 nano", family: "GPT-5.4" },
-  "gpt-5.4-pro": { provider: "openai", inputPerMTok: 30 * M, outputPerMTok: 180 * M, label: "GPT-5.4 Pro", family: "GPT-5.4" },
-
-  "gpt-5.2": { provider: "openai", inputPerMTok: 1.75 * M, outputPerMTok: 14 * M, label: "GPT-5.2", family: "GPT-5" },
-  "gpt-5.2-pro": { provider: "openai", inputPerMTok: 21 * M, outputPerMTok: 168 * M, label: "GPT-5.2 Pro", family: "GPT-5" },
-  "gpt-5.1": { provider: "openai", inputPerMTok: 1.25 * M, outputPerMTok: 10 * M, label: "GPT-5.1", family: "GPT-5" },
-  "gpt-5": { provider: "openai", inputPerMTok: 1.25 * M, outputPerMTok: 10 * M, label: "GPT-5", family: "GPT-5" },
-  "gpt-5-mini": { provider: "openai", inputPerMTok: 0.25 * M, outputPerMTok: 2 * M, label: "GPT-5 mini", family: "GPT-5" },
-  "gpt-5-nano": { provider: "openai", inputPerMTok: 0.05 * M, outputPerMTok: 0.4 * M, label: "GPT-5 nano", family: "GPT-5" },
-  "gpt-5-pro": { provider: "openai", inputPerMTok: 15 * M, outputPerMTok: 120 * M, label: "GPT-5 Pro", family: "GPT-5" },
-
-  "gpt-4.1": { provider: "openai", inputPerMTok: 2 * M, outputPerMTok: 8 * M, label: "GPT-4.1", family: "GPT-4" },
-  "gpt-4.1-mini": { provider: "openai", inputPerMTok: 0.4 * M, outputPerMTok: 1.6 * M, label: "GPT-4.1 mini", family: "GPT-4" },
-  "gpt-4.1-nano": { provider: "openai", inputPerMTok: 0.1 * M, outputPerMTok: 0.4 * M, label: "GPT-4.1 nano", family: "GPT-4" },
-  "gpt-4o": { provider: "openai", inputPerMTok: 2.5 * M, outputPerMTok: 10 * M, label: "GPT-4o", family: "GPT-4" },
-  "gpt-4o-mini": { provider: "openai", inputPerMTok: 0.15 * M, outputPerMTok: 0.6 * M, label: "GPT-4o mini", family: "GPT-4" },
-
-  "o3": { provider: "openai", inputPerMTok: 2 * M, outputPerMTok: 8 * M, label: "o3", family: "Reasoning (o-series)" },
-  "o3-pro": { provider: "openai", inputPerMTok: 20 * M, outputPerMTok: 80 * M, label: "o3-pro", family: "Reasoning (o-series)" },
-  "o3-mini": { provider: "openai", inputPerMTok: 1.1 * M, outputPerMTok: 4.4 * M, label: "o3-mini", family: "Reasoning (o-series)" },
-  "o4-mini": { provider: "openai", inputPerMTok: 1.1 * M, outputPerMTok: 4.4 * M, label: "o4-mini", family: "Reasoning (o-series)" },
-  "o1": { provider: "openai", inputPerMTok: 15 * M, outputPerMTok: 60 * M, label: "o1", family: "Reasoning (o-series)" },
-  "o1-pro": { provider: "openai", inputPerMTok: 150 * M, outputPerMTok: 600 * M, label: "o1-pro", family: "Reasoning (o-series)" },
-
-  // ---- Anthropic
-  "claude-opus-5": { provider: "anthropic", inputPerMTok: 5 * M, outputPerMTok: 25 * M, label: "Claude Opus 5", family: "Claude" },
-  "claude-sonnet-5": { provider: "anthropic", inputPerMTok: 3 * M, outputPerMTok: 15 * M, label: "Claude Sonnet 5", family: "Claude" },
-  "claude-haiku-4-5": { provider: "anthropic", inputPerMTok: 1 * M, outputPerMTok: 5 * M, label: "Claude Haiku 4.5", family: "Claude" },
+  "gpt-5.6-luna": {
+    provider: "openai", inputPerMTok: 0.2 * M, outputPerMTok: 1.2 * M,
+    label: "GPT-5.6 Luna", family: "Fast and cheap", tier: "fast",
+    note: "Newest generation, low cost",
+  },
+  "gpt-5-mini": {
+    provider: "openai", inputPerMTok: 0.25 * M, outputPerMTok: 2 * M,
+    label: "GPT-5 mini", family: "Fast and cheap", tier: "fast",
+    note: "Reliable everyday choice",
+  },
+  "gpt-5-nano": {
+    provider: "openai", inputPerMTok: 0.05 * M, outputPerMTok: 0.4 * M,
+    label: "GPT-5 nano", family: "Fast and cheap", tier: "fast",
+    note: "Cheapest that still teaches well",
+  },
 };
 
 /** What a robot teaches with when nobody has chosen otherwise. */
-export const DEFAULT_MODEL = "gpt-4.1";
+// Cheap enough that a $2 grant buys plenty of teaching, current enough to
+// write good skills. Verified authoring end-to-end on this family.
+export const DEFAULT_MODEL = "gpt-5.6-luna";
 
 export function priceFor(model: string): ModelPrice | undefined {
   return MODELS[model];
@@ -135,6 +137,8 @@ export function catalogue(balanceMicros: number) {
       id,
       label: price.label,
       family: price.family,
+      tier: price.tier,
+      note: price.note,
       provider: price.provider,
       inputPerMTok: price.inputPerMTok,
       outputPerMTok: price.outputPerMTok,

@@ -73,7 +73,7 @@ test("a streamed call reaches the client intact AND lands a usage row", async ()
   const res = await app.request("/v1/chat/completions", {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
-    body: JSON.stringify({ model: "gpt-4.1", messages: [], stream: true }),
+    body: JSON.stringify({ model: "gpt-5-nano", messages: [], stream: true }),
   });
   expect(res.status).toBe(200);
   expect(res.headers.get("content-type")).toContain("text/event-stream");
@@ -88,22 +88,22 @@ test("a streamed call reaches the client intact AND lands a usage row", async ()
   const row = after[after.length - 1];
   expect(row.inputTokens).toBe(1200);
   expect(row.outputTokens).toBe(340);
-  // gpt-4.1: $2/Mtok in, $8/Mtok out.
-  expect(row.costMicros).toBe(1200 * 2 + 340 * 8);
+  // gpt-5-nano: $0.05/Mtok in, $0.40/Mtok out.
+  expect(row.costMicros).toBe(Math.ceil(1200 * 0.05 + 340 * 0.4));
 });
 
 test("we ask OpenAI for usage, because it omits it from streams otherwise", async () => {
   await app.request("/v1/chat/completions", {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
-    body: JSON.stringify({ model: "gpt-4.1", messages: [], stream: true }),
+    body: JSON.stringify({ model: "gpt-5-nano", messages: [], stream: true }),
   });
   expect(lastRequestBody.stream_options.include_usage).toBe(true);
 });
 
 test("includeUsage preserves options the caller already set", () => {
   const out = includeUsage(
-    { model: "gpt-4.1", stream_options: { something_else: 1 } },
+    { model: "gpt-5-nano", stream_options: { something_else: 1 } },
     "openai",
   ) as any;
   expect(out.stream_options).toEqual({ something_else: 1, include_usage: true });
