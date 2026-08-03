@@ -13,6 +13,7 @@ import { eq } from "drizzle-orm";
 
 import { ORIGIN, makeApp, signUp } from "./harness.js";
 import { SIGNUP_GRANT_MICROS } from "../src/credits.js";
+import { priceFor, worstCaseMicros } from "../src/pricing.js";
 import { creditGrant, skill, usage } from "../src/app-schema.js";
 
 let app: Awaited<ReturnType<typeof makeApp>>["app"];
@@ -227,4 +228,57 @@ test("skill sync requires a robot key", async () => {
     body: JSON.stringify({ name: "x", description: "y", code: "z" }),
   });
   expect(res.status).toBe(401);
+});
+
+test("a balance too small to cover one call is refused before forwarding", async () => {
+  const { app: fresh, db: freshDb } = await makeApp();
+  const freshCookie = await signUp(fresh, "nearly-broke@example.com");
+  const created = await fresh.request("/api/keys", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Cookie: freshCookie, Origin: ORIGIN },
+    body: JSON.stringify({ name: "nearly broke" }),
+  });
+  const { key: freshKey } = await created.json();
+  const me = await fresh.request("/api/me", {
+    headers: { Cookie: freshCookie, Origin: ORIGIN },
+  });
+  const freshUserId = (await me.json()).user.id;
+
+  // Spend down to a hundredth of a cent — above zero, so the old
+  // `balance > 0` guard waved this straight through into a call that could
+  // finish dollars in the red.
+  await freshDb.insert(usage).values({
+    id: crypto.randomUUID(),
+    userId: freshUserId,
+    keyId: null,
+    model: "gpt-4.1",
+    inputTokens: 0,
+    outputTokens: 0,
+    costMicros: SIGNUP_GRANT_MICROS - 10,
+  });
+
+  const res = await fresh.request("/v1/chat/completions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${freshKey}` },
+    body: JSON.stringify({ model: "gpt-4.1", messages: [] }),
+  });
+  expect(res.status).toBe(402);
+  const { error } = await res.json();
+  expect(error.type).toBe("insufficient_credit");
+  // Says what is actually wrong, rather than claiming the account is empty.
+  expect(error.message).toContain("Not enough BotCortex credit");
+});
+
+test("the ceiling scales with the model, and max_tokens is trusted", () => {
+  const cheap = worstCaseMicros(priceFor("gpt-4.1-mini")!);
+  const dear = worstCaseMicros(priceFor("claude-opus-5")!);
+  expect(dear).toBeGreaterThan(cheap);
+
+  // A caller naming a smaller budget should not be held to the assumed one.
+  const bounded = worstCaseMicros(priceFor("gpt-4.1")!, 100);
+  expect(bounded).toBeLessThan(worstCaseMicros(priceFor("gpt-4.1")!));
+
+  // The signup grant must still buy a useful number of calls, or a new owner
+  // hits a 402 before learning anything.
+  expect(Math.floor(SIGNUP_GRANT_MICROS / worstCaseMicros(priceFor("gpt-4.1")!))).toBeGreaterThanOrEqual(10);
 });

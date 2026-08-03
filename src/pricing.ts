@@ -49,3 +49,30 @@ export function costMicros(
 }
 
 export const ALLOWED_MODELS = Object.keys(MODELS);
+
+/**
+ * What a single call could cost at worst, used as a floor guard before we
+ * forward anything.
+ *
+ * The old check was `balance > 0`, which let an account holding a hundredth of
+ * a cent start a call that could cost dollars. Token counts are unknowable
+ * until the response comes back, so these are deliberate assumed ceilings, not
+ * accounting: a request that names `max_tokens` is trusted for the output half.
+ *
+ * The trade is that the last fraction of a balance becomes unspendable. That
+ * beats letting an owner finish meaningfully negative.
+ */
+// Sized against what the authoring agent actually sends — measured teach calls
+// run ~1.5-2k input and tens of output tokens — with roughly 10x headroom. Too
+// generous a ceiling is not "safer": it strands usable credit and refuses work
+// an owner has the balance for.
+const ASSUMED_MAX_INPUT_TOKENS = 16_000;
+const ASSUMED_MAX_OUTPUT_TOKENS = 8_000;
+
+export function worstCaseMicros(price: ModelPrice, maxTokens?: unknown): number {
+  const output =
+    typeof maxTokens === "number" && Number.isFinite(maxTokens) && maxTokens > 0
+      ? maxTokens
+      : ASSUMED_MAX_OUTPUT_TOKENS;
+  return costMicros(price, ASSUMED_MAX_INPUT_TOKENS, output);
+}

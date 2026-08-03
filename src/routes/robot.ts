@@ -17,7 +17,13 @@ import { Hono } from "hono";
 import type { Db } from "../db.js";
 import { balanceFor, formatMicros, recordUsage } from "../credits.js";
 import { keyFromRequest, resolveKey, sha256, type ResolvedKey } from "../keys.js";
-import { ALLOWED_MODELS, costMicros, priceFor, type Provider } from "../pricing.js";
+import {
+  ALLOWED_MODELS,
+  costMicros,
+  priceFor,
+  worstCaseMicros,
+  type Provider,
+} from "../pricing.js";
 import { robot, skill } from "../app-schema.js";
 import { user } from "../auth-schema.js";
 
@@ -149,14 +155,22 @@ export function robotRoutes(db: Db) {
     // The owner's balance is judged before our own configuration: an account
     // with no credit gets the same actionable 402 whether or not the server
     // happens to hold a vendor key.
+    //
+    // Judged against what this call could cost at WORST, not against zero. A
+    // balance-above-zero check let an account holding a hundredth of a cent
+    // start a call that finished dollars in the red, because the debit only
+    // happens once the response arrives.
     const balance = await balanceFor(db, key.userId);
-    if (balance.balanceMicros <= 0) {
+    const ceiling = worstCaseMicros(price, body.max_tokens);
+    if (balance.balanceMicros < ceiling) {
       return c.json(
         {
           error: {
             type: "insufficient_credit",
             message:
-              "This account is out of BotCortex credits. Taught skills keep running — only new teaching needs credit.",
+              balance.balanceMicros <= 0
+                ? "This account is out of BotCortex credits. Taught skills keep running — only new teaching needs credit."
+                : `Not enough BotCortex credit left to cover another ${body.model} call (${formatMicros(balance.balanceMicros)} remaining, up to ${formatMicros(ceiling)} needed). Taught skills keep running.`,
           },
         },
         402,
