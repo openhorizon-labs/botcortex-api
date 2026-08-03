@@ -6,10 +6,18 @@
  * forwarded-but-unpriced model would meter to zero — free inference that
  * no test catches, since the models under test are always priced.
  *
- * Prices are per MILLION tokens in micro-dollars ($2.00/Mtok = 2_000_000),
- * quoted at list from each vendor's public pricing as of 2026-08-03. We
- * charge these through at cost for the credit preview — no markup — so any
- * later margin decision is a deliberate edit here rather than a hidden one.
+ * Prices are per MILLION tokens in micro-dollars ($2.00/Mtok = 2_000_000).
+ *
+ * SOURCE: https://developers.openai.com/api/docs/pricing, read 2026-08-03.
+ * Not from memory — this key serves models newer than any training data, and
+ * a guessed price in a billing table means charging people the wrong amount.
+ * gpt-5.5 was spot-checked against openai.com independently and matched.
+ * Re-verify against that page before trusting these with real money.
+ *
+ * Anthropic prices come from the claude-api skill's model table.
+ *
+ * We charge these through at cost — no markup — so any later margin decision
+ * is a deliberate edit here rather than a hidden one.
  */
 export type Provider = "openai" | "anthropic";
 
@@ -17,20 +25,59 @@ export interface ModelPrice {
   provider: Provider;
   inputPerMTok: number;
   outputPerMTok: number;
+  /** What the owner sees. These are robot owners, not API consumers. */
+  label: string;
+  /** Family heading in the picker. */
+  family: string;
 }
 
-export const MODELS: Record<string, ModelPrice> = {
-  // OpenAI
-  "gpt-4.1": { provider: "openai", inputPerMTok: 2_000_000, outputPerMTok: 8_000_000 },
-  "gpt-4.1-mini": { provider: "openai", inputPerMTok: 400_000, outputPerMTok: 1_600_000 },
-  "gpt-4o": { provider: "openai", inputPerMTok: 2_500_000, outputPerMTok: 10_000_000 },
-  "gpt-4o-mini": { provider: "openai", inputPerMTok: 150_000, outputPerMTok: 600_000 },
+const M = 1_000_000;
 
-  // Anthropic
-  "claude-opus-5": { provider: "anthropic", inputPerMTok: 5_000_000, outputPerMTok: 25_000_000 },
-  "claude-sonnet-5": { provider: "anthropic", inputPerMTok: 3_000_000, outputPerMTok: 15_000_000 },
-  "claude-haiku-4-5": { provider: "anthropic", inputPerMTok: 1_000_000, outputPerMTok: 5_000_000 },
+export const MODELS: Record<string, ModelPrice> = {
+  // ---- OpenAI, current lineup. Dated snapshots (gpt-5.4-2026-03-05), codex
+  // variants, and legacy 3.5 are deliberately absent: nobody teaching a robot
+  // picks those, and every extra row is another price to keep honest.
+  "gpt-5.6-sol": { provider: "openai", inputPerMTok: 5 * M, outputPerMTok: 30 * M, label: "GPT-5.6 Sol", family: "GPT-5.6" },
+  "gpt-5.6-terra": { provider: "openai", inputPerMTok: 2 * M, outputPerMTok: 12 * M, label: "GPT-5.6 Terra", family: "GPT-5.6" },
+  "gpt-5.6-luna": { provider: "openai", inputPerMTok: 0.2 * M, outputPerMTok: 1.2 * M, label: "GPT-5.6 Luna", family: "GPT-5.6" },
+
+  "gpt-5.5": { provider: "openai", inputPerMTok: 5 * M, outputPerMTok: 30 * M, label: "GPT-5.5", family: "GPT-5.5" },
+  "gpt-5.5-pro": { provider: "openai", inputPerMTok: 30 * M, outputPerMTok: 180 * M, label: "GPT-5.5 Pro", family: "GPT-5.5" },
+
+  "gpt-5.4": { provider: "openai", inputPerMTok: 2.5 * M, outputPerMTok: 15 * M, label: "GPT-5.4", family: "GPT-5.4" },
+  "gpt-5.4-mini": { provider: "openai", inputPerMTok: 0.75 * M, outputPerMTok: 4.5 * M, label: "GPT-5.4 mini", family: "GPT-5.4" },
+  "gpt-5.4-nano": { provider: "openai", inputPerMTok: 0.2 * M, outputPerMTok: 1.25 * M, label: "GPT-5.4 nano", family: "GPT-5.4" },
+  "gpt-5.4-pro": { provider: "openai", inputPerMTok: 30 * M, outputPerMTok: 180 * M, label: "GPT-5.4 Pro", family: "GPT-5.4" },
+
+  "gpt-5.2": { provider: "openai", inputPerMTok: 1.75 * M, outputPerMTok: 14 * M, label: "GPT-5.2", family: "GPT-5" },
+  "gpt-5.2-pro": { provider: "openai", inputPerMTok: 21 * M, outputPerMTok: 168 * M, label: "GPT-5.2 Pro", family: "GPT-5" },
+  "gpt-5.1": { provider: "openai", inputPerMTok: 1.25 * M, outputPerMTok: 10 * M, label: "GPT-5.1", family: "GPT-5" },
+  "gpt-5": { provider: "openai", inputPerMTok: 1.25 * M, outputPerMTok: 10 * M, label: "GPT-5", family: "GPT-5" },
+  "gpt-5-mini": { provider: "openai", inputPerMTok: 0.25 * M, outputPerMTok: 2 * M, label: "GPT-5 mini", family: "GPT-5" },
+  "gpt-5-nano": { provider: "openai", inputPerMTok: 0.05 * M, outputPerMTok: 0.4 * M, label: "GPT-5 nano", family: "GPT-5" },
+  "gpt-5-pro": { provider: "openai", inputPerMTok: 15 * M, outputPerMTok: 120 * M, label: "GPT-5 Pro", family: "GPT-5" },
+
+  "gpt-4.1": { provider: "openai", inputPerMTok: 2 * M, outputPerMTok: 8 * M, label: "GPT-4.1", family: "GPT-4" },
+  "gpt-4.1-mini": { provider: "openai", inputPerMTok: 0.4 * M, outputPerMTok: 1.6 * M, label: "GPT-4.1 mini", family: "GPT-4" },
+  "gpt-4.1-nano": { provider: "openai", inputPerMTok: 0.1 * M, outputPerMTok: 0.4 * M, label: "GPT-4.1 nano", family: "GPT-4" },
+  "gpt-4o": { provider: "openai", inputPerMTok: 2.5 * M, outputPerMTok: 10 * M, label: "GPT-4o", family: "GPT-4" },
+  "gpt-4o-mini": { provider: "openai", inputPerMTok: 0.15 * M, outputPerMTok: 0.6 * M, label: "GPT-4o mini", family: "GPT-4" },
+
+  "o3": { provider: "openai", inputPerMTok: 2 * M, outputPerMTok: 8 * M, label: "o3", family: "Reasoning (o-series)" },
+  "o3-pro": { provider: "openai", inputPerMTok: 20 * M, outputPerMTok: 80 * M, label: "o3-pro", family: "Reasoning (o-series)" },
+  "o3-mini": { provider: "openai", inputPerMTok: 1.1 * M, outputPerMTok: 4.4 * M, label: "o3-mini", family: "Reasoning (o-series)" },
+  "o4-mini": { provider: "openai", inputPerMTok: 1.1 * M, outputPerMTok: 4.4 * M, label: "o4-mini", family: "Reasoning (o-series)" },
+  "o1": { provider: "openai", inputPerMTok: 15 * M, outputPerMTok: 60 * M, label: "o1", family: "Reasoning (o-series)" },
+  "o1-pro": { provider: "openai", inputPerMTok: 150 * M, outputPerMTok: 600 * M, label: "o1-pro", family: "Reasoning (o-series)" },
+
+  // ---- Anthropic
+  "claude-opus-5": { provider: "anthropic", inputPerMTok: 5 * M, outputPerMTok: 25 * M, label: "Claude Opus 5", family: "Claude" },
+  "claude-sonnet-5": { provider: "anthropic", inputPerMTok: 3 * M, outputPerMTok: 15 * M, label: "Claude Sonnet 5", family: "Claude" },
+  "claude-haiku-4-5": { provider: "anthropic", inputPerMTok: 1 * M, outputPerMTok: 5 * M, label: "Claude Haiku 4.5", family: "Claude" },
 };
+
+/** What a robot teaches with when nobody has chosen otherwise. */
+export const DEFAULT_MODEL = "gpt-4.1";
 
 export function priceFor(model: string): ModelPrice | undefined {
   return MODELS[model];
@@ -75,4 +122,25 @@ export function worstCaseMicros(price: ModelPrice, maxTokens?: unknown): number 
       ? maxTokens
       : ASSUMED_MAX_OUTPUT_TOKENS;
   return costMicros(price, ASSUMED_MAX_INPUT_TOKENS, output);
+}
+
+/** The picker's data: what it is, what it costs, and whether this balance can
+ *  actually afford a teach on it. Answering that here stops an owner picking a
+ *  $30/Mtok model and hitting a 402 on their first sentence. */
+export function catalogue(balanceMicros: number) {
+  return ALLOWED_MODELS.map((id) => {
+    const price = MODELS[id];
+    const needed = worstCaseMicros(price);
+    return {
+      id,
+      label: price.label,
+      family: price.family,
+      provider: price.provider,
+      inputPerMTok: price.inputPerMTok,
+      outputPerMTok: price.outputPerMTok,
+      /** Worst case for one call — what the balance is judged against. */
+      neededMicros: needed,
+      affordable: balanceMicros >= needed,
+    };
+  });
 }

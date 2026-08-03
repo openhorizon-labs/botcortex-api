@@ -13,7 +13,7 @@ import type { AuthLike } from "../hono.js";
 import { SIGNUP_GRANT_MICROS, balanceFor, formatMicros, grant } from "../credits.js";
 import { mintKey } from "../keys.js";
 import { generateTitle } from "../titles.js";
-import { ALLOWED_MODELS } from "../pricing.js";
+import { ALLOWED_MODELS, DEFAULT_MODEL, catalogue } from "../pricing.js";
 import { conversation, message, robot, robotKey } from "../app-schema.js";
 
 type Env = { Variables: { userId: string } };
@@ -248,6 +248,18 @@ export function accountRoutes(auth: AuthLike, db: Db) {
     }
 
     return c.json({ ok: true });
+  });
+
+  /** The model picker's data — ids, labels, real per-token prices, and
+   *  whether this balance can cover a teach on each. Served from the same
+   *  table the proxy bills from, so the price shown is the price charged. */
+  app.get("/models", async (c) => {
+    const balance = await balanceFor(db, c.get("userId"));
+    return c.json({
+      models: catalogue(balance.balanceMicros),
+      default: DEFAULT_MODEL,
+      balanceMicros: balance.balanceMicros,
+    });
   });
 
   app.get("/credits", async (c) => {
