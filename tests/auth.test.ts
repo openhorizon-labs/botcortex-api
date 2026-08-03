@@ -4,38 +4,13 @@
  * signs a user up, and reads the session back.
  */
 import { beforeAll, expect, test } from "bun:test";
-import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
 
-import { PGlite } from "@electric-sql/pglite";
-import { betterAuth } from "better-auth";
-import { drizzleAdapter } from "better-auth/adapters/drizzle";
-import { drizzle } from "drizzle-orm/pglite";
+import { ORIGIN, makeApp } from "./harness.js";
 
-import { createApp } from "../src/hono.js";
-import * as schema from "../src/auth-schema.js";
-
-const ORIGIN = "http://localhost:3000";
-let app: ReturnType<typeof createApp>;
+let app: Awaited<ReturnType<typeof makeApp>>["app"];
 
 beforeAll(async () => {
-  const pglite = new PGlite();
-  const migrations = join(import.meta.dir, "..", "drizzle");
-  for (const file of readdirSync(migrations).filter((f) => f.endsWith(".sql")).sort()) {
-    const sql = readFileSync(join(migrations, file), "utf8");
-    for (const statement of sql.split("--> statement-breakpoint")) {
-      await pglite.exec(statement);
-    }
-  }
-  const db = drizzle(pglite, { schema });
-  const auth = betterAuth({
-    database: drizzleAdapter(db, { provider: "pg", schema }),
-    emailAndPassword: { enabled: true },
-    trustedOrigins: [ORIGIN],
-    secret: "test-secret-at-least-32-characters-long",
-    baseURL: "http://localhost:8787",
-  });
-  app = createApp(auth, [ORIGIN]);
+  ({ app } = await makeApp());
 });
 
 test("health responds", async () => {

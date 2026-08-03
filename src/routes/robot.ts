@@ -1,0 +1,264 @@
+/**
+ * Routes a ROBOT calls, authenticated by a robot key (never a session).
+ *
+ * The inference routes are deliberately shaped as drop-in replacements for
+ * the vendors' own endpoints, so the runtime enables them by swapping one
+ * base_url — the agent, its tools, and its loop stay exactly where they are,
+ * on the robot. We become the billing seam, not a step in the agent loop.
+ *
+ *   POST /v1/chat/completions   OpenAI-shaped   (client base_url = <api>/v1)
+ *   POST /v1/messages           Anthropic-shaped (client base_url = <api>)
+ *   POST /v1/skills             skill sync
+ *   GET  /v1/me                 who this key belongs to + remaining credit
+ */
+import { eq } from "drizzle-orm";
+import { Hono } from "hono";
+
+import type { Db } from "../db.js";
+import { balanceFor, formatMicros, recordUsage } from "../credits.js";
+import { keyFromRequest, resolveKey, type ResolvedKey } from "../keys.js";
+import { ALLOWED_MODELS, costMicros, priceFor, type Provider } from "../pricing.js";
+import { skill } from "../app-schema.js";
+import { user } from "../auth-schema.js";
+
+const UPSTREAM: Record<Provider, string> = {
+  openai: "https://api.openai.com/v1/chat/completions",
+  anthropic: "https://api.anthropic.com/v1/messages",
+};
+
+const ENV_KEY: Record<Provider, string> = {
+  openai: "OPENAI_API_KEY",
+  anthropic: "ANTHROPIC_API_KEY",
+};
+
+type Env = { Variables: { key: ResolvedKey } };
+
+/** Token counts, normalised across the two response shapes.
+ *  Anthropic reports cached tokens separately; we fold them into input at
+ *  full rate — a small overcharge on cache hits, and the honest direction to
+ *  err while this is a preview. Revisit if prompt caching gets heavy use. */
+function tokensFrom(data: any, provider: Provider) {
+  const u = data?.usage ?? {};
+  if (provider === "openai") {
+    return {
+      inputTokens: u.prompt_tokens ?? 0,
+      outputTokens: u.completion_tokens ?? 0,
+    };
+  }
+  return {
+    inputTokens:
+      (u.input_tokens ?? 0) +
+      (u.cache_creation_input_tokens ?? 0) +
+      (u.cache_read_input_tokens ?? 0),
+    outputTokens: u.output_tokens ?? 0,
+  };
+}
+
+function upstreamHeaders(provider: Provider, incoming: Headers, secret: string): Headers {
+  const headers = new Headers({ "content-type": "application/json" });
+  if (provider === "openai") {
+    headers.set("authorization", `Bearer ${secret}`);
+    return headers;
+  }
+  headers.set("x-api-key", secret);
+  // The tool runner negotiates features through these; constructing a clean
+  // request without them breaks the Anthropic path in ways the OpenAI path
+  // never surfaces.
+  headers.set("anthropic-version", incoming.get("anthropic-version") ?? "2023-06-01");
+  const beta = incoming.get("anthropic-beta");
+  if (beta) headers.set("anthropic-beta", beta);
+  return headers;
+}
+
+export function robotRoutes(db: Db) {
+  const app = new Hono<Env>();
+
+  app.use("*", async (c, next) => {
+    const raw = keyFromRequest(c.req.raw.headers);
+    if (!raw) {
+      return c.json(
+        { error: { type: "authentication_error", message: "Missing robot key." } },
+        401,
+      );
+    }
+    const resolved = await resolveKey(db, raw);
+    if (!resolved) {
+      return c.json(
+        {
+          error: {
+            type: "authentication_error",
+            message: "Unknown or revoked robot key. Mint a new one in the BotCortex app.",
+          },
+        },
+        401,
+      );
+    }
+    c.set("key", resolved);
+    await next();
+  });
+
+  async function proxy(c: any, provider: Provider) {
+    const key = c.get("key") as ResolvedKey;
+
+    const body = await c.req.json().catch(() => null);
+    if (!body || typeof body.model !== "string") {
+      return c.json(
+        { error: { type: "invalid_request_error", message: "Body must include a model." } },
+        400,
+      );
+    }
+    if (body.stream) {
+      // No unmetered path: usage only arrives in the final SSE chunk, and
+      // neither runtime path streams today. Tee the stream here (with
+      // stream_options.include_usage) when one does.
+      return c.json(
+        {
+          error: {
+            type: "invalid_request_error",
+            message: "Streaming is not supported through the BotCortex proxy yet.",
+          },
+        },
+        400,
+      );
+    }
+
+    const price = priceFor(body.model);
+    if (!price) {
+      return c.json(
+        {
+          error: {
+            type: "invalid_request_error",
+            message: `Model ${body.model} is not available on BotCortex credits. Allowed: ${ALLOWED_MODELS.join(", ")}`,
+          },
+        },
+        400,
+      );
+    }
+    if (price.provider !== provider) {
+      return c.json(
+        {
+          error: {
+            type: "invalid_request_error",
+            message: `Model ${body.model} is a ${price.provider} model; use that provider's endpoint.`,
+          },
+        },
+        400,
+      );
+    }
+
+    // The owner's balance is judged before our own configuration: an account
+    // with no credit gets the same actionable 402 whether or not the server
+    // happens to hold a vendor key.
+    const balance = await balanceFor(db, key.userId);
+    if (balance.balanceMicros <= 0) {
+      return c.json(
+        {
+          error: {
+            type: "insufficient_credit",
+            message:
+              "This account is out of BotCortex credits. Taught skills keep running — only new teaching needs credit.",
+          },
+        },
+        402,
+      );
+    }
+
+    const secret = process.env[ENV_KEY[provider]];
+    if (!secret) {
+      return c.json(
+        {
+          error: {
+            type: "api_error",
+            message: `${ENV_KEY[provider]} is not configured on this server.`,
+          },
+        },
+        503,
+      );
+    }
+
+    const upstream = await fetch(UPSTREAM[provider], {
+      method: "POST",
+      headers: upstreamHeaders(provider, c.req.raw.headers, secret),
+      body: JSON.stringify(body),
+    });
+
+    const text = await upstream.text();
+    if (!upstream.ok) {
+      // Pass the vendor's own error through untouched — the SDK on the robot
+      // knows how to read it, and masking it would make debugging guesswork.
+      return new Response(text, {
+        status: upstream.status,
+        headers: { "content-type": "application/json" },
+      });
+    }
+
+    const data = JSON.parse(text);
+    const { inputTokens, outputTokens } = tokensFrom(data, provider);
+    await recordUsage(db, {
+      userId: key.userId,
+      keyId: key.id,
+      model: body.model,
+      inputTokens,
+      outputTokens,
+      costMicros: costMicros(price, inputTokens, outputTokens),
+    });
+
+    return c.json(data);
+  }
+
+  app.post("/chat/completions", (c) => proxy(c, "openai"));
+  app.post("/messages", (c) => proxy(c, "anthropic"));
+
+  /** Skill sync. The robot keeps the original and runs from disk; this copy
+   *  feeds the registry. Best-effort by contract — the runtime never lets a
+   *  failure here break a teach. */
+  app.post("/skills", async (c) => {
+    const key = c.get("key");
+    const body = await c.req.json().catch(() => null);
+    const { name, description, code, platform } = body ?? {};
+    if (
+      typeof name !== "string" ||
+      typeof code !== "string" ||
+      typeof description !== "string"
+    ) {
+      return c.json({ error: "name, description and code are required" }, 400);
+    }
+
+    const now = new Date();
+    await db
+      .insert(skill)
+      .values({
+        id: crypto.randomUUID(),
+        userId: key.userId,
+        name,
+        description,
+        code,
+        platform: typeof platform === "string" ? platform : "unknown",
+        createdAt: now,
+        updatedAt: now,
+      })
+      .onConflictDoUpdate({
+        target: [skill.userId, skill.name],
+        set: { description, code, updatedAt: now },
+      });
+
+    return c.json({ ok: true, name });
+  });
+
+  app.get("/me", async (c) => {
+    const key = c.get("key");
+    const [owner] = await db
+      .select({ email: user.email, name: user.name })
+      .from(user)
+      .where(eq(user.id, key.userId))
+      .limit(1);
+    const balance = await balanceFor(db, key.userId);
+    return c.json({
+      user: owner ?? null,
+      credit: { ...balance, display: formatMicros(balance.balanceMicros) },
+      models: ALLOWED_MODELS,
+    });
+  });
+
+  return app;
+}

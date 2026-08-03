@@ -1,9 +1,17 @@
 /**
  * The Hono app — split from the Bun entrypoint so tests can drive it
  * in-process with a different auth/db wiring.
+ *
+ * Two authentication worlds meet here and never mix:
+ *   /api/*  session cookie, called by the web app through its Next rewrite
+ *   /v1/*   robot key, called by a runtime on someone's robot
  */
 import { Hono } from "hono";
 import { cors } from "hono/cors";
+
+import type { Db } from "./db.js";
+import { accountRoutes } from "./routes/account.js";
+import { robotRoutes } from "./routes/robot.js";
 
 /** The slice of a Better Auth instance the app actually uses — structural,
  *  so any betterAuth() instantiation fits regardless of its generic params. */
@@ -16,7 +24,7 @@ export interface AuthLike {
   };
 }
 
-export function createApp(auth: AuthLike, origins: string[]) {
+export function createApp(auth: AuthLike, origins: string[], db: Db) {
   const app = new Hono();
 
   // CORS must be registered before the routes it protects.
@@ -25,7 +33,7 @@ export function createApp(auth: AuthLike, origins: string[]) {
     cors({
       origin: origins,
       allowHeaders: ["Content-Type", "Authorization"],
-      allowMethods: ["POST", "GET", "OPTIONS"],
+      allowMethods: ["POST", "GET", "DELETE", "OPTIONS"],
       exposeHeaders: ["Content-Length"],
       maxAge: 600,
       credentials: true,
@@ -41,6 +49,14 @@ export function createApp(auth: AuthLike, origins: string[]) {
     if (!session) return c.json({ user: null }, 401);
     return c.json({ user: session.user });
   });
+
+  // Registered after the handlers above so their terminating responses win;
+  // this sub-app's session guard only ever runs for its own paths.
+  app.route("/api", accountRoutes(auth, db));
+
+  // No CORS: robots are not browsers, and nothing here should be reachable
+  // from a page's fetch carrying ambient credentials.
+  app.route("/v1", robotRoutes(db));
 
   return app;
 }
