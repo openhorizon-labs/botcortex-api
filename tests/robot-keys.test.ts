@@ -151,16 +151,6 @@ test("a model routed to the wrong provider's endpoint is refused", async () => {
   expect((await res.json()).error.message).toContain("anthropic model");
 });
 
-test("streaming is refused, because usage would go uncounted", async () => {
-  const res = await app.request("/v1/chat/completions", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
-    body: JSON.stringify({ model: "gpt-4.1", messages: [], stream: true }),
-  });
-  expect(res.status).toBe(400);
-  expect((await res.json()).error.message).toContain("Streaming");
-});
-
 test("an exhausted balance gets a 402 before anything is forwarded", async () => {
   const { app: fresh, db: freshDb } = await makeApp();
   const freshCookie = await signUp(fresh, "broke@example.com");

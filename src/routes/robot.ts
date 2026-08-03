@@ -9,7 +9,12 @@
  *   POST /v1/chat/completions   OpenAI-shaped   (client base_url = <api>/v1)
  *   POST /v1/messages           Anthropic-shaped (client base_url = <api>)
  *   POST /v1/skills             skill sync
+ *   POST /v1/robots/register    a paired robot announcing itself
  *   GET  /v1/me                 who this key belongs to + remaining credit
+ *
+ * Streamed responses are forwarded and metered on the way past — see
+ * streaming.ts. They used to be refused outright, because usage only arrives
+ * at the very end of an SSE stream and forwarding blind would have been free.
  */
 import { and, eq, isNull } from "drizzle-orm";
 import { Hono } from "hono";
@@ -24,6 +29,7 @@ import {
   worstCaseMicros,
   type Provider,
 } from "../pricing.js";
+import { includeUsage, meteredStream } from "../streaming.js";
 import { robot, skill } from "../app-schema.js";
 import { user } from "../auth-schema.js";
 
@@ -124,21 +130,6 @@ export function robotRoutes(db: Db) {
         400,
       );
     }
-    if (body.stream) {
-      // No unmetered path: usage only arrives in the final SSE chunk, and
-      // neither runtime path streams today. Tee the stream here (with
-      // stream_options.include_usage) when one does.
-      return c.json(
-        {
-          error: {
-            type: "invalid_request_error",
-            message: "Streaming is not supported through the BotCortex proxy yet.",
-          },
-        },
-        400,
-      );
-    }
-
     const price = priceFor(body.model);
     if (!price) {
       return c.json(
@@ -201,11 +192,37 @@ export function robotRoutes(db: Db) {
       );
     }
 
+    const streaming = Boolean(body.stream);
     const upstream = await fetch(upstreamFor(provider), {
       method: "POST",
       headers: upstreamHeaders(provider, c.req.raw.headers, secret),
-      body: JSON.stringify(body),
+      // OpenAI omits usage from streams unless asked, so we always ask.
+      body: JSON.stringify(streaming ? includeUsage(body, provider) : body),
     });
+
+    if (streaming && upstream.ok && upstream.body) {
+      // Mirror the bytes straight through and read the counts off them in
+      // passing. onFinish also runs if the client hangs up early — tokens
+      // spent before a tab closed were still spent.
+      const metered = meteredStream(upstream.body, provider, (used) =>
+        recordUsage(db, {
+          userId: key.userId,
+          keyId: key.id,
+          model: body.model,
+          inputTokens: used.inputTokens,
+          outputTokens: used.outputTokens,
+          costMicros: costMicros(price, used.inputTokens, used.outputTokens),
+        }),
+      );
+      return new Response(metered, {
+        status: upstream.status,
+        headers: {
+          "content-type": upstream.headers.get("content-type") ?? "text/event-stream",
+          "cache-control": "no-cache",
+          connection: "keep-alive",
+        },
+      });
+    }
 
     const text = await upstream.text();
     if (!upstream.ok) {
