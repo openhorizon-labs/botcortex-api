@@ -13,7 +13,7 @@ import type { AuthLike } from "../hono.js";
 import { SIGNUP_GRANT_MICROS, balanceFor, formatMicros, grant } from "../credits.js";
 import { mintKey } from "../keys.js";
 import { ALLOWED_MODELS } from "../pricing.js";
-import { robot, robotKey } from "../app-schema.js";
+import { message, robot, robotKey } from "../app-schema.js";
 
 type Env = { Variables: { userId: string } };
 
@@ -105,6 +105,56 @@ export function accountRoutes(auth: AuthLike, db: Db) {
       .where(eq(robot.userCode, userCode))
       .limit(1);
     return c.json({ robot: pending ?? null });
+  });
+
+  /** The conversation, oldest first — what the app rehydrates on load. */
+  app.get("/messages", async (c) => {
+    const limit = Math.min(Number(c.req.query("limit") ?? 200) || 200, 500);
+    const rows = await db
+      .select({
+        id: message.id,
+        author: message.author,
+        text: message.text,
+        robotName: message.robotName,
+        createdAt: message.createdAt,
+      })
+      .from(message)
+      .where(eq(message.userId, c.get("userId")))
+      // seq, never createdAt: messages emitted inside the same millisecond
+      // tie on a timestamp and come back in planner order.
+      .orderBy(desc(message.seq))
+      .limit(limit);
+    // Newest-first in SQL so LIMIT keeps the RECENT tail, then flipped for
+    // display — ordering ascending first would truncate to the oldest.
+    return c.json({ messages: rows.reverse() });
+  });
+
+  app.post("/messages", async (c) => {
+    const body = await c.req.json().catch(() => null);
+    const { id, author, text, robotName } = body ?? {};
+    if (typeof id !== "string" || typeof text !== "string") {
+      return c.json({ error: "id and text are required" }, 400);
+    }
+    if (author !== "you" && author !== "robot") {
+      return c.json({ error: "author must be 'you' or 'robot'" }, 400);
+    }
+    await db
+      .insert(message)
+      .values({
+        id,
+        userId: c.get("userId"),
+        author,
+        text,
+        robotName: typeof robotName === "string" ? robotName : null,
+      })
+      // Idempotent: a retried or replayed POST must not double the transcript.
+      .onConflictDoNothing({ target: message.id });
+    return c.json({ ok: true });
+  });
+
+  app.delete("/messages", async (c) => {
+    await db.delete(message).where(eq(message.userId, c.get("userId")));
+    return c.json({ ok: true });
   });
 
   app.get("/credits", async (c) => {

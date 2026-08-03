@@ -11,6 +11,7 @@
 import { relations } from "drizzle-orm";
 import {
   bigint,
+  bigserial,
   index,
   integer,
   pgTable,
@@ -161,6 +162,48 @@ export const robot = pgTable(
 export const robotRelations = relations(robot, ({ one }) => ({
   user: one(user, { fields: [robot.userId], references: [user.id] }),
   key: one(robotKey, { fields: [robot.keyId], references: [robotKey.id] }),
+}));
+
+/**
+ * The owner's conversation with their robot.
+ *
+ * Written by the WEB APP, not the runtime: the app sees both sides (what was
+ * typed and what came back over the socket), where the runtime only knows its
+ * own half. The cost is that a reply arriving after the tab closes is lost —
+ * acceptable, since the SKILL it produced is already saved on the robot and in
+ * the registry. The transcript is a record, not the artifact.
+ *
+ * `id` is generated client-side so persisting is idempotent: replaying a POST
+ * conflicts on the primary key instead of duplicating the message.
+ */
+export const message = pgTable(
+  "message",
+  {
+    id: text("id").primaryKey(),
+    /**
+     * Insertion order, and the ONLY thing the transcript is sorted by.
+     *
+     * created_at is not enough: a teach emits several lines in the same
+     * millisecond, they tie, and `ORDER BY created_at LIMIT n` then returns
+     * them in whatever order the planner feels like — which surfaced as a
+     * test that passed alone and failed in a full run.
+     */
+    seq: bigserial("seq", { mode: "number" }).notNull(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    /** Which robot this was said to, when one was attached. */
+    robotName: text("robot_name"),
+    /** "you" | "robot" — mirrors the app's ChatMessage. */
+    author: text("author").notNull(),
+    text: text("text").notNull(),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => [index("message_user_idx").on(t.userId, t.seq)],
+);
+
+export const messageRelations = relations(message, ({ one }) => ({
+  user: one(user, { fields: [message.userId], references: [user.id] }),
 }));
 
 export const robotKeyRelations = relations(robotKey, ({ one }) => ({

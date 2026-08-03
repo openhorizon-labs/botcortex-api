@@ -29,6 +29,13 @@
       "when": 1785770909176,
       "tag": "0003_ancient_rhino",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1785775383916,
+      "tag": "0004_empty_proudstar",
+      "breakpoints": true
     }
   ]
 }
