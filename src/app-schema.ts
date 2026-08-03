@@ -165,6 +165,37 @@ export const robotRelations = relations(robot, ({ one }) => ({
 }));
 
 /**
+ * One thread of conversation with a robot.
+ *
+ * Threads exist so "New task" can start a fresh one instead of DELETING the
+ * previous — which is what it did when the transcript was a single rolling
+ * list, and which lost history a click at a time.
+ *
+ * The title is derived from the first thing the owner typed rather than asked
+ * for, and set on that first message so an empty thread never renders as a
+ * blank row.
+ */
+export const conversation = pgTable(
+  "conversation",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    title: text("title"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    /** Bumped on every message, so the sidebar sorts by recent activity. */
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => [index("conversation_user_idx").on(t.userId, t.updatedAt)],
+);
+
+export const conversationRelations = relations(conversation, ({ one, many }) => ({
+  user: one(user, { fields: [conversation.userId], references: [user.id] }),
+  messages: many(message),
+}));
+
+/**
  * The owner's conversation with their robot.
  *
  * Written by the WEB APP, not the runtime: the app sees both sides (what was
@@ -180,6 +211,9 @@ export const message = pgTable(
   "message",
   {
     id: text("id").primaryKey(),
+    conversationId: text("conversation_id")
+      .notNull()
+      .references(() => conversation.id, { onDelete: "cascade" }),
     /**
      * Insertion order, and the ONLY thing the transcript is sorted by.
      *
@@ -199,11 +233,15 @@ export const message = pgTable(
     text: text("text").notNull(),
     createdAt: timestamp("created_at").notNull().defaultNow(),
   },
-  (t) => [index("message_user_idx").on(t.userId, t.seq)],
+  (t) => [index("message_convo_idx").on(t.conversationId, t.seq)],
 );
 
 export const messageRelations = relations(message, ({ one }) => ({
   user: one(user, { fields: [message.userId], references: [user.id] }),
+  conversation: one(conversation, {
+    fields: [message.conversationId],
+    references: [conversation.id],
+  }),
 }));
 
 export const robotKeyRelations = relations(robotKey, ({ one }) => ({

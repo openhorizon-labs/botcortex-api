@@ -1,6 +1,8 @@
 /**
- * Chat history. The transcript used to live in React state and a refresh wiped
- * it — the robot remembered the skill, the owner lost the conversation.
+ * Conversations and their transcripts.
+ *
+ * The failure this replaces: a single rolling list where "New task" DELETED
+ * everything. Threads exist so starting fresh is additive.
  */
 import { beforeAll, expect, test } from "bun:test";
 
@@ -9,83 +11,150 @@ import { ORIGIN, makeApp, signUp } from "./harness.js";
 let app: Awaited<ReturnType<typeof makeApp>>["app"];
 let cookie: string;
 
-const post = (body: unknown, as = cookie) =>
-  app.request("/api/messages", {
-    method: "POST",
+const json = (path: string, body: unknown, as: string, method = "POST") =>
+  app.request(path, {
+    method,
     headers: { "Content-Type": "application/json", Origin: ORIGIN, Cookie: as },
     body: JSON.stringify(body),
   });
 
-const list = async (as = cookie) => {
-  const res = await app.request("/api/messages", {
-    headers: { Cookie: as, Origin: ORIGIN },
-  });
-  return (await res.json()).messages as { id: string; author: string; text: string }[];
-};
+async function newConversation(as = cookie): Promise<string> {
+  const res = await json("/api/conversations", {}, as);
+  expect(res.status).toBe(201);
+  return (await res.json()).id;
+}
+
+const say = (conversationId: string, author: string, text: string, as = cookie) =>
+  json("/api/messages", { id: crypto.randomUUID(), conversationId, author, text }, as);
+
+const listConversations = async (as = cookie) =>
+  (await (await app.request("/api/conversations", { headers: { Cookie: as, Origin: ORIGIN } })).json())
+    .conversations as { id: string; title: string | null; messages: number }[];
+
+const readMessages = async (id: string, as = cookie) =>
+  (await (
+    await app.request(`/api/messages?conversation=${id}`, { headers: { Cookie: as, Origin: ORIGIN } })
+  ).json()).messages as { author: string; text: string }[];
 
 beforeAll(async () => {
   ({ app } = await makeApp());
-  cookie = await signUp(app, "chat@example.com");
+  cookie = await signUp(app, "threads@example.com");
 });
 
-test("messages round-trip oldest-first", async () => {
-  expect((await post({ id: "m1", author: "you", text: "wave the right arm" })).status).toBe(200);
-  expect((await post({ id: "m2", author: "robot", text: "Done — it waved." })).status).toBe(200);
+test("starting a new task keeps the old one — the whole point", async () => {
+  const a = await newConversation();
+  await say(a, "you", "wave the right arm");
+  await say(a, "robot", "Done.");
 
-  const history = await list();
-  expect(history.map((m) => m.text)).toEqual(["wave the right arm", "Done — it waved."]);
-  expect(history[0].author).toBe("you");
+  const b = await newConversation();
+  await say(b, "you", "fold the towel");
+
+  const threads = await listConversations();
+  expect(threads).toHaveLength(2);
+  // Both survive, and the older one still has everything it had.
+  expect(await readMessages(a)).toHaveLength(2);
+  expect((await readMessages(a)).map((m) => m.text)).toEqual(["wave the right arm", "Done."]);
+  expect((await readMessages(b)).map((m) => m.text)).toEqual(["fold the towel"]);
 });
 
-test("re-posting the same id does not duplicate the transcript", async () => {
-  // The exact failure a retry or a double-mounted effect would cause.
-  await post({ id: "m1", author: "you", text: "wave the right arm" });
-  await post({ id: "m1", author: "you", text: "wave the right arm" });
-  const history = await list();
-  expect(history.filter((m) => m.id === "m1")).toHaveLength(1);
+test("the title comes from the first thing the owner typed", async () => {
+  const id = await newConversation();
+  await say(id, "you", "sort the red parts into the left bin, gently and slowly please");
+  await say(id, "you", "actually make it faster");
+
+  const [thread] = (await listConversations()).filter((t) => t.id === id);
+  expect(thread.title).toBe("sort the red parts into the left bin, ge");
+  expect(thread.title!.length).toBeLessThanOrEqual(40);
 });
 
-test("history is per-owner", async () => {
-  const other = await signUp(app, "someone-else@example.com");
-  await post({ id: "theirs", author: "you", text: "not yours" }, other);
-
-  expect((await list()).some((m) => m.id === "theirs")).toBe(false);
-  expect((await list(other)).map((m) => m.text)).toEqual(["not yours"]);
+test("a robot speaking first does not title the thread", async () => {
+  const id = await newConversation();
+  await say(id, "robot", "Connected.");
+  expect((await listConversations()).find((t) => t.id === id)!.title).toBeNull();
 });
 
-test("a bad author is rejected rather than stored", async () => {
-  const res = await post({ id: "bad", author: "hacker", text: "x" });
-  expect(res.status).toBe(400);
-  expect((await list()).some((m) => m.id === "bad")).toBe(false);
+test("empty conversations stay out of the sidebar", async () => {
+  const before = (await listConversations()).length;
+  await newConversation();
+  expect((await listConversations()).length).toBe(before);
 });
 
-test("the limit keeps the RECENT tail, not the oldest", async () => {
-  const fresh = await signUp(app, "chatty@example.com");
-  for (let i = 0; i < 12; i += 1) {
-    await post({ id: `seq-${i}`, author: "you", text: `message ${i}` }, fresh);
-  }
-  const res = await app.request("/api/messages?limit=3", {
-    headers: { Cookie: fresh, Origin: ORIGIN },
-  });
-  const tail = (await res.json()).messages as { text: string }[];
-  expect(tail).toHaveLength(3);
-  // Ascending-then-LIMIT would have returned messages 0,1,2.
-  expect(tail.map((m) => m.text)).toEqual(["message 9", "message 10", "message 11"]);
+test("most recently active sorts first", async () => {
+  const older = await newConversation();
+  await say(older, "you", "older thread");
+  const newer = await newConversation();
+  await say(newer, "you", "newer thread");
+
+  await say(older, "you", "bumped");
+  expect((await listConversations())[0].id).toBe(older);
 });
 
-test("clearing wipes only the caller's conversation", async () => {
-  const other = await signUp(app, "keeper@example.com");
-  await post({ id: "keep-me", author: "you", text: "still here" }, other);
+test("threads are per-owner", async () => {
+  const other = await signUp(app, "nosy@example.com");
+  const mine = await newConversation();
+  await say(mine, "you", "private");
 
-  const cleared = await app.request("/api/messages", {
+  expect((await listConversations(other)).some((t) => t.id === mine)).toBe(false);
+  // Reading someone else's thread by id yields nothing, not their transcript.
+  expect(await readMessages(mine, other)).toHaveLength(0);
+  // And writing into it is refused outright.
+  expect((await say(mine, "you", "injected", other)).status).toBe(404);
+});
+
+test("deleting one thread leaves the others alone", async () => {
+  const keep = await newConversation();
+  await say(keep, "you", "keep me");
+  const drop = await newConversation();
+  await say(drop, "you", "drop me");
+
+  const gone = await app.request(`/api/conversations/${drop}`, {
     method: "DELETE",
     headers: { Cookie: cookie, Origin: ORIGIN },
   });
-  expect(cleared.status).toBe(200);
-  expect(await list()).toHaveLength(0);
-  expect((await list(other)).map((m) => m.text)).toEqual(["still here"]);
+  expect(gone.status).toBe(200);
+
+  const ids = (await listConversations()).map((t) => t.id);
+  expect(ids).toContain(keep);
+  expect(ids).not.toContain(drop);
+  expect(await readMessages(keep)).toHaveLength(1);
+});
+
+test("one owner cannot delete another's thread", async () => {
+  const other = await signUp(app, "vandal@example.com");
+  const mine = await newConversation();
+  await say(mine, "you", "still here");
+
+  const attempt = await app.request(`/api/conversations/${mine}`, {
+    method: "DELETE",
+    headers: { Cookie: other, Origin: ORIGIN },
+  });
+  expect(attempt.status).toBe(404);
+  expect(await readMessages(mine)).toHaveLength(1);
+});
+
+test("re-posting the same message id does not duplicate it", async () => {
+  const id = await newConversation();
+  const messageId = crypto.randomUUID();
+  const body = { id: messageId, conversationId: id, author: "you", text: "once" };
+  await json("/api/messages", body, cookie);
+  await json("/api/messages", body, cookie);
+  expect(await readMessages(id)).toHaveLength(1);
 });
 
 test("history needs a session", async () => {
-  expect((await app.request("/api/messages")).status).toBe(401);
+  expect((await app.request("/api/conversations")).status).toBe(401);
+  expect((await app.request("/api/messages?conversation=x")).status).toBe(401);
+});
+
+test("a robot reply cannot blank the title the owner's message just set", async () => {
+  // Both posts race in the real app: the user types, the robot answers, and a
+  // read-modify-write on the title let whichever landed last win.
+  const id = await newConversation();
+  await Promise.all([
+    say(id, "you", "pick up the blue cube"),
+    say(id, "robot", "Working on it."),
+    say(id, "robot", "Done."),
+  ]);
+  const thread = (await listConversations()).find((t) => t.id === id)!;
+  expect(thread.title).toBe("pick up the blue cube");
 });

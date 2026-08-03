@@ -36,6 +36,13 @@
       "when": 1785775383916,
       "tag": "0004_empty_proudstar",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1785776203891,
+      "tag": "0005_slippery_proudstar",
+      "breakpoints": true
     }
   ]
 }
