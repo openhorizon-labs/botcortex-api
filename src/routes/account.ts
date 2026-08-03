@@ -15,6 +15,7 @@ import {
   balanceFor,
   formatMicros,
   formatMicrosPrecise,
+  formatMicrosUsed,
   grant,
 } from "../credits.js";
 import { mintKey } from "../keys.js";
@@ -300,6 +301,11 @@ export function accountRoutes(auth: AuthLike, db: Db) {
       // Precise: two decimals would report a real afternoon of
       // teaching as "$0.00".
       spentDisplay: formatMicrosPrecise(balance.spentMicros),
+      // The sidebar reads "used / total", so both halves are formatted here
+      // rather than assembled in the client — how money is written is this
+      // service's business, and two clients would drift apart.
+      usedDisplay: formatMicrosUsed(balance.spentMicros),
+      grantedDisplay: formatMicros(balance.grantedMicros),
       models: ALLOWED_MODELS,
     });
   });

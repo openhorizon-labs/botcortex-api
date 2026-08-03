@@ -97,6 +97,21 @@ export function formatMicros(micros: number): string {
 }
 
 /**
+ * An amount already SPENT, rounded up to the cent.
+ *
+ * The mirror of formatMicros: a balance floors so it never overstates what is
+ * left, and spend ceils so it never understates what was taken. Both err
+ * against the house, which is the only defensible direction for a meter to be
+ * imprecise in. Without the ceiling, an afternoon of teaching reads "$0.00" —
+ * a claim that nothing was charged.
+ */
+export function formatMicrosUsed(micros: number): string {
+  const cents = Math.ceil(micros / 10_000);
+  const sign = cents < 0 ? "-" : "";
+  return `${sign}$${(Math.abs(cents) / 100).toFixed(2)}`;
+}
+
+/**
  * The same amount without rounding away the part that moves.
  *
  * For "used so far" and tooltips, where two decimals would render a real

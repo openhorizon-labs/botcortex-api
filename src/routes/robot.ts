@@ -20,7 +20,13 @@ import { and, eq, isNull } from "drizzle-orm";
 import { Hono } from "hono";
 
 import type { Db } from "../db.js";
-import { balanceFor, formatMicros, formatMicrosPrecise, recordUsage } from "../credits.js";
+import {
+  balanceFor,
+  formatMicros,
+  formatMicrosPrecise,
+  formatMicrosUsed,
+  recordUsage,
+} from "../credits.js";
 import { keyFromRequest, resolveKey, sha256, type ResolvedKey } from "../keys.js";
 import {
   ALLOWED_MODELS,
@@ -361,6 +367,8 @@ export function robotRoutes(db: Db) {
         // Precise: two decimals would report a real afternoon of teaching
         // as "$0.00".
         spentDisplay: formatMicrosPrecise(balance.spentMicros),
+        usedDisplay: formatMicrosUsed(balance.spentMicros),
+        grantedDisplay: formatMicros(balance.grantedMicros),
       },
       models: ALLOWED_MODELS,
     });
