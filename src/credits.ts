@@ -74,16 +74,26 @@ export async function recordUsage(
 /**
  * Micro-dollars as a human string — two decimals, like money (Sai's call).
  *
- * The trade is real and worth stating: a teach on the cheapest model costs
- * about a fifth of a cent, so this figure only ticks after roughly five of
- * them. A balance that sits still is what got the billing system reported as
- * broken once already. What makes that survivable now is that the number is no
- * longer the only evidence — the runtime says which wallet it spends from, an
- * unpaired robot shows no balance at all, and the precise spend is one hover
- * away via formatMicrosPrecise.
+ * Floored to the cent, NOT rounded to nearest. A balance of $1.995577 is
+ * "$1.99"; rounding it up to "$2.00" hands back the exact figure the account
+ * started with, so an owner who has taught four times reads a number saying
+ * nothing was ever spent. Flooring also never overstates what is left, which
+ * is the only safe direction for a balance to err.
+ *
+ * The remaining trade is real: a teach on the cheapest model costs about a
+ * fifth of a cent, so this still ticks only every fifth one. What makes that
+ * survivable is that the number is no longer the only evidence the meter works
+ * — the runtime states which wallet it spends from, an unpaired robot shows no
+ * balance at all, and the precise spend is one hover away via
+ * formatMicrosPrecise.
  */
 export function formatMicros(micros: number): string {
-  return `$${(micros / 1_000_000).toFixed(2)}`;
+  // Via integer cents: (micros / 1e6).toFixed(2) would round to nearest, and
+  // Math.floor on the float alone trips on binary representation near a cent
+  // boundary.
+  const cents = Math.floor(micros / 10_000);
+  const sign = cents < 0 ? "-" : "";
+  return `${sign}$${(Math.abs(cents) / 100).toFixed(2)}`;
 }
 
 /**

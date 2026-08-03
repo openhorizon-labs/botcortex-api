@@ -88,16 +88,24 @@ test("the catalogue covers the allowlist exactly", () => {
   expect(catalogue(0).map((m) => m.id).sort()).toEqual([...ALLOWED_MODELS].sort());
 });
 
-test("a balance reads like money — two decimals, always", () => {
+test("a balance reads like money — two decimals, floored", () => {
   expect(formatMicros(3_000_000)).toBe("$3.00");
   expect(formatMicros(1_250_000)).toBe("$1.25");
   expect(formatMicros(0)).toBe("$0.00");
-  // Sub-cent detail rounds away here by design (Sai's call). The cost is
-  // real — a teach is ~2000 micros, so this ticks only every fifth one —
-  // which is why the precise form exists for anything that would otherwise
-  // read as "nothing was charged".
-  expect(formatMicros(2_997_827)).toBe("$3.00");
+
+  // Floored, never rounded up. Reported as "the credits are wrong": a
+  // $1.995577 balance rounded to "$2.00" — the untouched signup grant — so
+  // four teaches looked like none.
+  expect(formatMicros(1_995_577)).toBe("$1.99");
+  expect(formatMicros(2_997_827)).toBe("$2.99");
+  expect(formatMicros(1_999_999)).toBe("$1.99");
+
+  // Sub-cent detail still rounds away; that is why the precise form exists.
   expect(formatMicros(2_173)).toBe("$0.00");
+
+  // The cap is soft by design, so a call can land slightly in the red. Say so
+  // rather than flooring an overdraft to a comfortable "$0.00".
+  expect(formatMicros(-5_000)).toBe("-$0.01");
 });
 
 test("the precise form keeps the part that actually moves", () => {
