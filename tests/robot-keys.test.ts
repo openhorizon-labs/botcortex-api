@@ -265,7 +265,7 @@ test("the ceiling scales with the model, and max_tokens is trusted", () => {
   expect(dear).toBeGreaterThan(cheap);
 
   // A caller naming a smaller budget should not be held to the assumed one.
-  const bounded = worstCaseMicros(priceFor("gpt-5.6-sol")!, 100);
+  const bounded = worstCaseMicros(priceFor("gpt-5.6-sol")!, { max_tokens: 100 });
   expect(bounded).toBeLessThan(dear);
 
   // Even the dearest model we sell must buy several teaches on the signup

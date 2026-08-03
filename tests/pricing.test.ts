@@ -116,3 +116,34 @@ test("the precise form keeps the part that actually moves", () => {
   expect(formatMicrosPrecise(1_250_000)).toBe("$1.25");
   expect(formatMicrosPrecise(0)).toBe("$0.00");
 });
+
+test("the ceiling is measured from the request, not assumed", () => {
+  const price = priceFor("gpt-5.6-sol")!;
+  const small = worstCaseMicros(price, { model: "gpt-5.6-sol", messages: [] });
+
+  // A caller sending a huge context must raise the ceiling with it. The old
+  // gate assumed 16k input tokens whatever arrived, so a 400k-token context —
+  // $2.00 of input alone on this model — was gated at about $0.32 and waved
+  // straight through.
+  const huge = worstCaseMicros(price, {
+    model: "gpt-5.6-sol",
+    messages: [{ role: "user", content: "x".repeat(1_600_000) }],
+  });
+  expect(small).toBeLessThan(400_000);
+  // The ceiling has to cover what the input alone will cost: ~400k tokens at
+  // $5/Mtok. Anything less is a gate that cannot pay for the call it allows.
+  expect(huge).toBeGreaterThan(2_000_000);
+});
+
+test("max_completion_tokens bounds the output half too", () => {
+  const price = priceFor("gpt-5.6-sol")!;
+  const base = { model: "gpt-5.6-sol", messages: [] };
+  // OpenAI's chat-completions callers send this name; reading only max_tokens
+  // meant every one of them silently fell back to the 8k assumption.
+  expect(worstCaseMicros(price, { ...base, max_completion_tokens: 100 })).toBeLessThan(
+    worstCaseMicros(price, base),
+  );
+  expect(worstCaseMicros(price, { ...base, max_tokens: 100 })).toBe(
+    worstCaseMicros(price, { ...base, max_completion_tokens: 100 }),
+  );
+});

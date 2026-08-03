@@ -139,29 +139,80 @@ test("Anthropic's cumulative output is taken at its max, not summed", async () =
   expect(counted).toEqual([{ inputTokens: 600, outputTokens: 90 }]);
 });
 
-test("a client hanging up mid-stream is still billed for what it used", async () => {
+/** Real OpenAI ordering: content, then finish_reason, then usage, then [DONE].
+ *  The usage frame is LAST — which is the whole problem below. */
+function openAiStream() {
   const frames = [
-    'data: {"choices":[],"usage":{"prompt_tokens":700,"completion_tokens":50}}\n\n',
-    'data: {"choices":[{"delta":{"content":"more"}}]}\n\n',
+    'data: {"choices":[{"delta":{"content":"the whole answer"}}]}\n\n',
+    'data: {"choices":[{"finish_reason":"stop","delta":{}}]}\n\n',
+    'data: {"choices":[],"usage":{"prompt_tokens":700,"completion_tokens":900}}\n\n',
+    "data: [DONE]\n\n",
   ];
-  const source = new ReadableStream<Uint8Array>({
+  return new ReadableStream<Uint8Array>({
     start(controller) {
       const encoder = new TextEncoder();
       for (const f of frames) controller.enqueue(encoder.encode(f));
       controller.close();
     },
   });
+}
 
+test("a client hanging up mid-stream is still billed for what it used", async () => {
+  // This test used to put the usage frame FIRST, which is the opposite of what
+  // OpenAI does — so it read the counts before hanging up and passed, while
+  // the real ordering billed nothing at all. The test that looked like it
+  // covered this is what hid the hole.
   const counted: { inputTokens: number; outputTokens: number }[] = [];
-  const metered = meteredStream(source, "openai", (u) => {
-    counted.push(u);
-  });
+  const metered = meteredStream(
+    openAiStream(),
+    "openai",
+    (u) => {
+      counted.push(u);
+    },
+    (chars) => ({ inputTokens: 100, outputTokens: Math.ceil(chars / 4) }),
+  );
 
   const reader = metered.getReader();
-  await reader.read(); // take one chunk, then walk away
-  await reader.cancel("client closed the tab");
+  await reader.read(); // the content
+  await reader.read(); // finish_reason — the client now has the whole answer
+  await reader.cancel("got what I came for");
 
-  expect(counted).toEqual([{ inputTokens: 700, outputTokens: 50 }]);
+  // Free inference if this is empty: a complete completion, delivered, unbilled.
+  expect(counted).toHaveLength(1);
+  expect(counted[0].inputTokens).toBeGreaterThan(0);
+  expect(counted[0].outputTokens).toBeGreaterThan(0);
+});
+
+test("a stream read to the end bills the vendor's real counts, not the estimate", async () => {
+  const counted: { inputTokens: number; outputTokens: number }[] = [];
+  const metered = meteredStream(
+    openAiStream(),
+    "openai",
+    (u) => {
+      counted.push(u);
+    },
+    () => ({ inputTokens: 1, outputTokens: 1 }),
+  );
+  await new Response(metered).text();
+  // The estimate is a backstop, never a substitute for what actually arrived.
+  expect(counted).toEqual([{ inputTokens: 700, outputTokens: 900 }]);
+});
+
+test("a call that reached the vendor always leaves a row", async () => {
+  // No estimator and no usage frame: still recorded, because a missing row is
+  // indistinguishable from a call that never happened.
+  const counted: unknown[] = [];
+  const empty = new ReadableStream<Uint8Array>({
+    start(c) {
+      c.close();
+    },
+  });
+  await new Response(
+    meteredStream(empty, "openai", (u) => {
+      counted.push(u);
+    }),
+  ).text();
+  expect(counted).toHaveLength(1);
 });
 
 test("junk frames are skipped rather than throwing", () => {

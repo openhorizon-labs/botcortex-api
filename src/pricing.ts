@@ -118,12 +118,25 @@ export const ALLOWED_MODELS = Object.keys(MODELS);
 const ASSUMED_MAX_INPUT_TOKENS = 16_000;
 const ASSUMED_MAX_OUTPUT_TOKENS = 8_000;
 
-export function worstCaseMicros(price: ModelPrice, maxTokens?: unknown): number {
+/**
+ * `request` is the caller's body. The input half is measured from it rather
+ * than assumed: the assumption is 16k tokens, and a caller may send far more —
+ * a 400k-token context on the dearest model costs several dollars against a
+ * ceiling of thirty-odd cents, so the gate waved through calls it could not
+ * cover. Four characters per token is the usual rule of thumb, and the LARGER
+ * of measured and assumed is used so the ceiling can only ever rise.
+ */
+export function worstCaseMicros(price: ModelPrice, request?: unknown): number {
+  const body = (request ?? {}) as Record<string, unknown>;
+  const asked = (value: unknown) =>
+    typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0;
+  // max_completion_tokens is what OpenAI's chat-completions callers actually
+  // send; reading only max_tokens meant the output half silently fell back to
+  // the assumption for every one of them.
   const output =
-    typeof maxTokens === "number" && Number.isFinite(maxTokens) && maxTokens > 0
-      ? maxTokens
-      : ASSUMED_MAX_OUTPUT_TOKENS;
-  return costMicros(price, ASSUMED_MAX_INPUT_TOKENS, output);
+    asked(body.max_tokens) || asked(body.max_completion_tokens) || ASSUMED_MAX_OUTPUT_TOKENS;
+  const measuredInput = Math.ceil(JSON.stringify(request ?? "").length / 4);
+  return costMicros(price, Math.max(ASSUMED_MAX_INPUT_TOKENS, measuredInput), output);
 }
 
 /** The picker's data: what it is, what it costs, and whether this balance can

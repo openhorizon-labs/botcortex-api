@@ -72,17 +72,34 @@ export function usageFromEvent(block: string, provider: Provider): StreamUsage |
  * Mirrors `upstream` to the client while totting up usage, then calls
  * `onFinish` exactly once — including when the client hangs up early, because
  * tokens spent before someone closed a tab were still spent.
+ *
+ * `estimate` is the backstop for the case that made this free.
+ *
+ * This stream is PULL-driven: nothing is read from the vendor until the client
+ * asks for the next chunk. OpenAI emits `usage` in the very last frame, AFTER
+ * the one carrying `finish_reason` — so a client that reads until it has the
+ * whole completion and then simply stops reading leaves the usage frame
+ * unpulled. Counts stayed at zero, the old `if (total.inputTokens || …)` guard
+ * skipped onFinish entirely, and the call was never billed. Repeatable, on a
+ * free signup, against our vendor key.
+ *
+ * So counts are never trusted to arrive: when none did, `estimate` is billed
+ * instead, and onFinish always runs so a call can never pass through
+ * unrecorded.
  */
 export function meteredStream(
   upstream: ReadableStream<Uint8Array>,
   provider: Provider,
   onFinish: (usage: StreamUsage) => void | Promise<void>,
+  estimate?: (charsSeen: number) => StreamUsage,
 ): ReadableStream<Uint8Array> {
   const reader = upstream.getReader();
   const decoder = new TextDecoder();
   let buffered = "";
   const total: StreamUsage = { inputTokens: 0, outputTokens: 0 };
   let settled = false;
+  //: What we actually handed the client, for estimating an aborted stream.
+  let charsSeen = 0;
 
   const absorb = (block: string) => {
     const found = usageFromEvent(block, provider);
@@ -95,7 +112,11 @@ export function meteredStream(
   const settle = async () => {
     if (settled) return;
     settled = true;
-    if (total.inputTokens || total.outputTokens) await onFinish(total);
+    // No guard on the totals: a call that reached the vendor gets a row
+    // whatever happened to the stream. Zero-usage rows are cheap and visible;
+    // a missing row is free inference.
+    const observed = total.inputTokens || total.outputTokens;
+    await onFinish(observed ? total : (estimate?.(charsSeen) ?? total));
   };
 
   return new ReadableStream<Uint8Array>({
@@ -110,6 +131,7 @@ export function meteredStream(
       }
       // Client first: metering must never sit between the robot and its bytes.
       controller.enqueue(value);
+      charsSeen += value.byteLength;
 
       buffered += decoder.decode(value, { stream: true });
       let split: number;

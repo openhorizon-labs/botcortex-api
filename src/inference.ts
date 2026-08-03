@@ -132,7 +132,7 @@ export async function meteredProxy(
   // start a call that finished dollars in the red, because the debit only
   // happens once the response arrives.
   const balance = await balanceFor(db, caller.userId);
-  const ceiling = worstCaseMicros(price, body.max_tokens);
+  const ceiling = worstCaseMicros(price, body);
   if (balance.balanceMicros < ceiling) {
     return fail(
       402,
@@ -160,7 +160,10 @@ export async function meteredProxy(
     // Mirror the bytes straight through and read the counts off them in
     // passing. onFinish also runs if the client hangs up early — tokens
     // spent before a tab closed were still spent.
-    const metered = meteredStream(upstream.body, provider, (used) =>
+    const metered = meteredStream(
+      upstream.body,
+      provider,
+      (used) =>
       recordUsage(db, {
         userId: caller.userId,
         keyId: caller.keyId,
@@ -168,6 +171,15 @@ export async function meteredProxy(
         inputTokens: used.inputTokens,
         outputTokens: used.outputTokens,
         costMicros: costMicros(price, used.inputTokens, used.outputTokens),
+      }),
+      // Billed when the vendor's usage frame never arrives — which a client
+      // can arrange simply by stopping reading once it has the completion.
+      // Approximated at four characters per token, the usual rule of thumb,
+      // and rounded UP: erring against the house is the only defensible
+      // direction for a meter that had to guess.
+      (charsSeen) => ({
+        inputTokens: Math.ceil(JSON.stringify(body).length / 4),
+        outputTokens: Math.ceil(charsSeen / 4),
       }),
     );
     return new Response(metered, {
