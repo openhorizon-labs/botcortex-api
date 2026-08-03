@@ -12,6 +12,7 @@ import type { Db } from "../db.js";
 import type { AuthLike } from "../hono.js";
 import { SIGNUP_GRANT_MICROS, balanceFor, formatMicros, grant } from "../credits.js";
 import { mintKey } from "../keys.js";
+import { generateTitle } from "../titles.js";
 import { ALLOWED_MODELS } from "../pricing.js";
 import { conversation, message, robot, robotKey } from "../app-schema.js";
 
@@ -225,10 +226,25 @@ export function accountRoutes(auth: AuthLike, db: Db) {
     // wins — so the robot's reply blanked the title the user's message had
     // just set. `where title is null` lets exactly one writer take it.
     if (author === "you") {
-      await db
+      const fallback = text.slice(0, 40);
+      const claimed = await db
         .update(conversation)
-        .set({ title: text.slice(0, 40) })
-        .where(and(eq(conversation.id, conversationId), isNull(conversation.title)));
+        .set({ title: fallback })
+        .where(and(eq(conversation.id, conversationId), isNull(conversation.title)))
+        .returning();
+
+      // Only the writer that actually claimed the title upgrades it, and only
+      // while the stored value is still the exact fallback it wrote — so a
+      // rename, or another thread's title, can never be clobbered.
+      if (claimed.length > 0) {
+        const better = await generateTitle(text);
+        if (better && better !== fallback) {
+          await db
+            .update(conversation)
+            .set({ title: better })
+            .where(and(eq(conversation.id, conversationId), eq(conversation.title, fallback)));
+        }
+      }
     }
 
     return c.json({ ok: true });

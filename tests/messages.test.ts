@@ -4,7 +4,7 @@
  * The failure this replaces: a single rolling list where "New task" DELETED
  * everything. Threads exist so starting fresh is additive.
  */
-import { beforeAll, expect, test } from "bun:test";
+import { afterAll, beforeAll, expect, test } from "bun:test";
 
 import { ORIGIN, makeApp, signUp } from "./harness.js";
 
@@ -36,9 +36,18 @@ const readMessages = async (id: string, as = cookie) =>
     await app.request(`/api/messages?conversation=${id}`, { headers: { Cookie: as, Origin: ORIGIN } })
   ).json()).messages as { author: string; text: string }[];
 
+// Bun auto-loads .env, so without this the suite makes REAL OpenAI calls:
+// slow, billed, and non-deterministic. With no key, title generation declines
+// and the truncation stands — which is exactly the fallback worth pinning here.
+// The AI path has its own file, against a stub.
+const realKey = process.env.OPENAI_API_KEY;
 beforeAll(async () => {
+  delete process.env.OPENAI_API_KEY;
   ({ app } = await makeApp());
   cookie = await signUp(app, "threads@example.com");
+});
+afterAll(() => {
+  if (realKey) process.env.OPENAI_API_KEY = realKey;
 });
 
 test("starting a new task keeps the old one — the whole point", async () => {
@@ -57,7 +66,7 @@ test("starting a new task keeps the old one — the whole point", async () => {
   expect((await readMessages(b)).map((m) => m.text)).toEqual(["fold the towel"]);
 });
 
-test("the title comes from the first thing the owner typed", async () => {
+test("with no model available, the title falls back to a truncation", async () => {
   const id = await newConversation();
   await say(id, "you", "sort the red parts into the left bin, gently and slowly please");
   await say(id, "you", "actually make it faster");
