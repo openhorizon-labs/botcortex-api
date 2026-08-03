@@ -14,7 +14,7 @@ import { eq } from "drizzle-orm";
 
 import { ORIGIN, makeApp, signUp } from "./harness.js";
 import { usage } from "../src/app-schema.js";
-import { tokensFrom, upstreamHeaders } from "../src/routes/robot.js";
+import { tokensFrom, upstreamHeaders } from "../src/inference.js";
 
 let app: Awaited<ReturnType<typeof makeApp>>["app"];
 let db: Awaited<ReturnType<typeof makeApp>>["db"];

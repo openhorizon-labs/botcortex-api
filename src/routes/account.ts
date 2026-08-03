@@ -18,6 +18,7 @@ import {
   formatMicrosUsed,
   grant,
 } from "../credits.js";
+import { meteredProxy } from "../inference.js";
 import { mintKey } from "../keys.js";
 import { generateTitle } from "../titles.js";
 import { ALLOWED_MODELS, DEFAULT_MODEL, catalogue } from "../pricing.js";
@@ -280,6 +281,26 @@ export function accountRoutes(auth: AuthLike, db: Db) {
     // accepted while most were quietly doing nothing.
     return c.json({ ok: true, stored: inserted.length > 0 });
   });
+
+  /**
+   * Inference for the BROWSER sim, billed to the signed-in account.
+   *
+   * Same guards, same meter, same prices as the robot's endpoint — it is
+   * literally the same function (inference.ts). The only difference is the
+   * door: a session cookie rather than a `bx_live_` key, because the agent
+   * loop for the browser sim runs in the page, and a durable key held in
+   * browser JavaScript would be a worse trade than any convenience it bought.
+   *
+   * `keyId` is null, which usage rows have always permitted. The row still
+   * names the user, and the balance is derived from the user.
+   */
+  app.post("/inference/chat", (c) =>
+    meteredProxy(db, { userId: c.get("userId"), keyId: null }, "openai", c.req.raw),
+  );
+
+  app.post("/inference/messages", (c) =>
+    meteredProxy(db, { userId: c.get("userId"), keyId: null }, "anthropic", c.req.raw),
+  );
 
   /** The model picker's data — ids, labels, real per-token prices, and
    *  whether this balance can cover a teach on each. Served from the same
