@@ -14,7 +14,7 @@ import { eq } from "drizzle-orm";
 import { ORIGIN, makeApp, signUp } from "./harness.js";
 import { SIGNUP_GRANT_MICROS } from "../src/credits.js";
 import { priceFor, worstCaseMicros } from "../src/pricing.js";
-import { creditGrant, skill, usage } from "../src/app-schema.js";
+import { creditGrant, robotKey, skill, usage } from "../src/app-schema.js";
 
 let app: Awaited<ReturnType<typeof makeApp>>["app"];
 let db: Awaited<ReturnType<typeof makeApp>>["db"];
@@ -271,4 +271,25 @@ test("the ceiling scales with the model, and max_tokens is trusted", () => {
   // Even the dearest model we sell must buy several teaches on the signup
   // grant, or the lineup itself is a trap for a new owner.
   expect(Math.floor(SIGNUP_GRANT_MICROS / dear)).toBeGreaterThanOrEqual(5);
+});
+
+test("using a key records that it is live", async () => {
+  const before = await db.select().from(robotKey).where(eq(robotKey.userId, userId));
+  const untouched = before.find((k) => k.lastUsedAt === null);
+  expect(untouched).toBeDefined();
+
+  // lastUsedAt is the only signal an owner has for which keys are actually in
+  // use — which is what makes a stolen one visible. It used to be written
+  // without awaiting, so on serverless it would have been killed with the
+  // request and the column would have stayed null forever.
+  const created = await app.request("/api/keys", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Cookie: cookie, Origin: ORIGIN },
+    body: JSON.stringify({ name: "touch me" }),
+  });
+  const { id, key: fresh } = await created.json();
+  expect((await app.request("/v1/me", { headers: { "x-api-key": fresh } })).status).toBe(200);
+
+  const [after] = await db.select().from(robotKey).where(eq(robotKey.id, id));
+  expect(after.lastUsedAt).not.toBeNull();
 });

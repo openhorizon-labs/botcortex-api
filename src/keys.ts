@@ -47,18 +47,44 @@ export function keyFromRequest(headers: Headers): string | null {
 
 export type ResolvedKey = { id: string; userId: string };
 
+/** How stale a key's lastUsedAt may get before it is worth another write.
+ *  Fine grain buys nothing — the question it answers is "is this robot still
+ *  alive", not "what second did it last call". */
+const TOUCH_AFTER_MS = 60_000;
+
 /** Returns the owning account for a live key, or null if absent or revoked. */
 export async function resolveKey(db: Db, raw: string): Promise<ResolvedKey | null> {
   const [row] = await db
-    .select({ id: robotKey.id, userId: robotKey.userId })
+    .select({
+      id: robotKey.id,
+      userId: robotKey.userId,
+      lastUsedAt: robotKey.lastUsedAt,
+    })
     .from(robotKey)
     .where(and(eq(robotKey.hash, await sha256(raw)), isNull(robotKey.revokedAt)))
     .limit(1);
   if (!row) return null;
-  // Best-effort touch so the owner can see which robots are actually live.
-  db.update(robotKey)
-    .set({ lastUsedAt: new Date() })
-    .where(eq(robotKey.id, row.id))
-    .catch(() => {});
-  return row;
+
+  // AWAITED, not fired and forgotten.
+  //
+  // titles.ts documents this exact failure mode in this exact codebase: work
+  // left pending after the response is sent gets killed on serverless, so it
+  // passes locally and silently never runs in production. What it costs is
+  // revocation-relevant: lastUsedAt is the one signal an owner has for which
+  // keys are live, so a STOLEN key looked dormant.
+  //
+  // Rate-limited to a minute so the cost is one extra write per key per
+  // minute rather than one per inference call.
+  const stale =
+    !row.lastUsedAt || Date.now() - new Date(row.lastUsedAt).getTime() > TOUCH_AFTER_MS;
+  if (stale) {
+    await db
+      .update(robotKey)
+      .set({ lastUsedAt: new Date() })
+      .where(eq(robotKey.id, row.id))
+      // Still never fatal: a robot must not lose its key because a telemetry
+      // write failed.
+      .catch(() => {});
+  }
+  return { id: row.id, userId: row.userId };
 }
