@@ -66,14 +66,14 @@ test("starting a new task keeps the old one — the whole point", async () => {
   expect((await readMessages(b)).map((m) => m.text)).toEqual(["fold the towel"]);
 });
 
-test("with no model available, the title falls back to a truncation", async () => {
+test("the title is the owner's first sentence, truncated but never rewritten", async () => {
   const id = await newConversation();
   await say(id, "you", "sort the red parts into the left bin, gently and slowly please");
   await say(id, "you", "actually make it faster");
 
   const [thread] = (await listConversations()).filter((t) => t.id === id);
-  expect(thread.title).toBe("sort the red parts into the left bin, ge");
-  expect(thread.title!.length).toBeLessThanOrEqual(40);
+  expect(thread.title).toBe("sort the red parts into the left bin, gently and slowly plea");
+  expect(thread.title!.length).toBeLessThanOrEqual(60);
 });
 
 test("a robot speaking first does not title the thread", async () => {

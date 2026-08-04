@@ -20,7 +20,6 @@ import {
 } from "../credits.js";
 import { meteredProxy } from "../inference.js";
 import { mintKey } from "../keys.js";
-import { generateTitle } from "../titles.js";
 import { ALLOWED_MODELS, DEFAULT_MODEL, catalogue } from "../pricing.js";
 import { conversation, message, robot, robotKey } from "../app-schema.js";
 
@@ -247,33 +246,26 @@ export function accountRoutes(auth: AuthLike, db: Db) {
       .set({ updatedAt: new Date() })
       .where(eq(conversation.id, conversationId));
 
-    // Title from the first thing the OWNER typed, claimed atomically.
+    // Title = the first thing the OWNER typed, verbatim. Claimed atomically.
     //
     // Computing it from the row read above and writing it back looks
     // equivalent and is not: a user message and the robot's reply post
     // concurrently, both read title=null, and whichever UPDATE lands last
     // wins — so the robot's reply blanked the title the user's message had
     // just set. `where title is null` lets exactly one writer take it.
+    //
+    // A model used to rewrite it into something tidier, and that was a
+    // mistake. Typing "wave the left arm" produced a sidebar row reading "move
+    // left arm up and down" — a paraphrase the owner never wrote, which does
+    // not match what they are looking for and which COLLIDED with an existing
+    // row that had been paraphrased the same way. A task list is for
+    // recognising your own work; the words you chose are what you will scan
+    // for. It also cost a model call per conversation, on us.
     if (author === "you" && rowKind === "text") {
-      const fallback = text.slice(0, 40);
-      const claimed = await db
+      await db
         .update(conversation)
-        .set({ title: fallback })
-        .where(and(eq(conversation.id, conversationId), isNull(conversation.title)))
-        .returning();
-
-      // Only the writer that actually claimed the title upgrades it, and only
-      // while the stored value is still the exact fallback it wrote — so a
-      // rename, or another thread's title, can never be clobbered.
-      if (claimed.length > 0) {
-        const better = await generateTitle(text);
-        if (better && better !== fallback) {
-          await db
-            .update(conversation)
-            .set({ title: better })
-            .where(and(eq(conversation.id, conversationId), eq(conversation.title, fallback)));
-        }
-      }
+        .set({ title: text.slice(0, 60).trim() })
+        .where(and(eq(conversation.id, conversationId), isNull(conversation.title)));
     }
 
     // `stored` distinguishes "written" from "already had that id". Replying
