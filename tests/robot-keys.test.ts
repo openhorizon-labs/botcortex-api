@@ -220,6 +220,67 @@ test("skill sync requires a robot key", async () => {
   expect(res.status).toBe(401);
 });
 
+test("forgetting a skill deletes it once and says when there was nothing", async () => {
+  const push = await app.request("/v1/skills", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+    body: JSON.stringify({
+      name: "soon_forgotten",
+      description: "Ephemeral.",
+      code: "def run(ctx): pass",
+      platform: "openarm_v1",
+    }),
+  });
+  expect(push.status).toBe(200);
+
+  const first = await app.request("/v1/skills/soon_forgotten", {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${key}` },
+  });
+  expect(first.status).toBe(200);
+  expect((await first.json()).name).toBe("soon_forgotten");
+
+  // The 404 is the CLI's signal to say "the registry had no copy" — a second
+  // delete finding nothing must not read like a success.
+  const second = await app.request("/v1/skills/soon_forgotten", {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${key}` },
+  });
+  expect(second.status).toBe(404);
+});
+
+test("one account's key cannot forget another account's skill", async () => {
+  const push = await app.request("/v1/skills", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+    body: JSON.stringify({
+      name: "coveted",
+      description: "Someone else's.",
+      code: "def run(ctx): pass",
+      platform: "openarm_v1",
+    }),
+  });
+  expect(push.status).toBe(200);
+
+  const otherCookie = await signUp(app, "other-owner@example.com");
+  const minted = await app.request("/api/keys", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Cookie: otherCookie, Origin: ORIGIN },
+    body: JSON.stringify({ name: "other rig" }),
+  });
+  expect(minted.status).toBe(201);
+  const otherKey = (await minted.json()).key;
+
+  const theft = await app.request("/v1/skills/coveted", {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${otherKey}` },
+  });
+  expect(theft.status).toBe(404);
+
+  const rows = await db.select().from(skill).where(eq(skill.name, "coveted"));
+  expect(rows).toHaveLength(1);
+});
+
 test("a balance too small to cover one call is refused before forwarding", async () => {
   const { app: fresh, db: freshDb } = await makeApp();
   const freshCookie = await signUp(fresh, "nearly-broke@example.com");

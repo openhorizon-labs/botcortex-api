@@ -109,6 +109,24 @@ export function robotRoutes(db: Db) {
     return c.json({ ok: true, name });
   });
 
+  /** Forget a skill — the registry copy only; the robot deletes its own file.
+   *  A real 404 when nothing matched, so `botcortex forget` can tell the
+   *  owner whether an account copy existed instead of guessing. Scoped to the
+   *  key's owner the same way sync is: one user's key can never delete
+   *  another's skill, it just finds nothing. */
+  app.delete("/skills/:name", async (c) => {
+    const key = c.get("key");
+    const name = c.req.param("name");
+    const gone = await db
+      .delete(skill)
+      .where(and(eq(skill.userId, key.userId), eq(skill.name, name)))
+      .returning({ id: skill.id });
+    if (gone.length === 0) {
+      return c.json({ error: `no skill named ${name} in this account` }, 404);
+    }
+    return c.json({ ok: true, name });
+  });
+
   /**
    * The robot claims the row it described during pairing, or announces itself
    * on later boots. Address is the LAN WebSocket the web app dials — which is
