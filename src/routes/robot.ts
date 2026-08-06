@@ -95,7 +95,7 @@ export function robotRoutes(db: Db) {
     const gone = await db
       .delete(skill)
       .where(and(eq(skill.userId, key.userId), eq(skill.name, name)))
-      .returning({ id: skill.id });
+      .returning();
     if (gone.length === 0) {
       return c.json({ error: `no skill named ${name} in this account` }, 404);
     }
