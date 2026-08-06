@@ -33,6 +33,7 @@ import {
 import { meteredProxy } from "../inference.js";
 import { keyFromRequest, resolveKey, sha256, type ResolvedKey } from "../keys.js";
 import { ALLOWED_MODELS, type Provider } from "../pricing.js";
+import { upsertSkill } from "../registry.js";
 import { robot, skill } from "../app-schema.js";
 import { user } from "../auth-schema.js";
 
@@ -75,38 +76,12 @@ export function robotRoutes(db: Db) {
 
   /** Skill sync. The robot keeps the original and runs from disk; this copy
    *  feeds the registry. Best-effort by contract — the runtime never lets a
-   *  failure here break a teach. */
+   *  failure here break a teach. The write itself is shared with the browser
+   *  sim's cookie door — see registry.ts. */
   app.post("/skills", async (c) => {
-    const key = c.get("key");
-    const body = await c.req.json().catch(() => null);
-    const { name, description, code, platform } = body ?? {};
-    if (
-      typeof name !== "string" ||
-      typeof code !== "string" ||
-      typeof description !== "string"
-    ) {
-      return c.json({ error: "name, description and code are required" }, 400);
-    }
-
-    const now = new Date();
-    await db
-      .insert(skill)
-      .values({
-        id: crypto.randomUUID(),
-        userId: key.userId,
-        name,
-        description,
-        code,
-        platform: typeof platform === "string" ? platform : "unknown",
-        createdAt: now,
-        updatedAt: now,
-      })
-      .onConflictDoUpdate({
-        target: [skill.userId, skill.name],
-        set: { description, code, updatedAt: now },
-      });
-
-    return c.json({ ok: true, name });
+    const result = await upsertSkill(db, c.get("key").userId, await c.req.json().catch(() => null));
+    if (!result.ok) return c.json({ error: result.error }, result.status);
+    return c.json({ ok: true, name: result.name });
   });
 
   /** Forget a skill — the registry copy only; the robot deletes its own file.

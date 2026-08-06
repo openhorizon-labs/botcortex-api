@@ -21,6 +21,7 @@ import {
 import { meteredProxy } from "../inference.js";
 import { mintKey } from "../keys.js";
 import { ALLOWED_MODELS, DEFAULT_MODEL, catalogue } from "../pricing.js";
+import { upsertSkill } from "../registry.js";
 import { conversation, message, robot, robotKey } from "../app-schema.js";
 
 type Env = { Variables: { userId: string } };
@@ -73,6 +74,20 @@ export function accountRoutes(auth: AuthLike, db: Db) {
     }
 
     return c.json({ id, name, prefix, key: raw }, 201);
+  });
+
+  /** The browser sim's half of skill sync — Phase 5's promise: teach with
+   *  nothing installed, pair a real arm later, and the skills are already in
+   *  the account. Same write as the robot-key door (see registry.ts); the
+   *  only difference is who is proving identity, a session instead of a key. */
+  app.post("/skills", async (c) => {
+    const result = await upsertSkill(
+      db,
+      c.get("userId"),
+      await c.req.json().catch(() => null),
+    );
+    if (!result.ok) return c.json({ error: result.error }, result.status);
+    return c.json({ ok: true, name: result.name });
   });
 
   app.delete("/keys/:id", async (c) => {
