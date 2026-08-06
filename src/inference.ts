@@ -69,6 +69,28 @@ export function tokensFrom(data: any, provider: Provider) {
   };
 }
 
+/**
+ * A vendor key as an operator actually pasted it.
+ *
+ * Keys travel through editors that smart-quote and clipboards that add
+ * newlines, and a wrapped key then crashes Headers.set three calls deep with
+ * "Cannot convert argument to a ByteString" — an opaque 500 on every teach,
+ * which is exactly how production failed on Aug 6: OPENAI_API_KEY was saved
+ * in the dashboard wrapped in curly quotes. Strip what pasting added; if the
+ * value still cannot travel in a header, say so legibly instead of crashing.
+ */
+export function cleanSecret(raw: string): string | null {
+  let value = raw.trim();
+  const quotes = new Set(['"', "'", "“", "”", "‘", "’", "`"]);
+  while (value.length > 1 && quotes.has(value[0]) && quotes.has(value[value.length - 1])) {
+    value = value.slice(1, -1).trim();
+  }
+  for (const ch of value) {
+    if (ch.codePointAt(0)! > 255) return null;
+  }
+  return value || null;
+}
+
 export function upstreamHeaders(provider: Provider, incoming: Headers, secret: string): Headers {
   const headers = new Headers({ "content-type": "application/json" });
   if (provider === "openai") {
@@ -143,9 +165,19 @@ export async function meteredProxy(
     );
   }
 
-  const secret = process.env[ENV_KEY[provider]];
-  if (!secret) {
+  const configured = process.env[ENV_KEY[provider]];
+  if (!configured) {
     return fail(503, "api_error", `${ENV_KEY[provider]} is not configured on this server.`);
+  }
+  const secret = cleanSecret(configured);
+  if (!secret) {
+    return fail(
+      503,
+      "api_error",
+      `${ENV_KEY[provider]} on this server contains characters that cannot appear ` +
+        "in a request header — it was probably pasted with smart quotes or other " +
+        "formatting. Re-paste the raw key into the environment variable.",
+    );
   }
 
   const streaming = Boolean(body.stream);
