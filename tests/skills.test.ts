@@ -137,3 +137,43 @@ test("the read-back is scoped to the session's account", async () => {
   expect((await res.json()).skills).toEqual([]);
   expect((await app.request("/api/skills", { headers: { Origin: ORIGIN } })).status).toBe(401);
 });
+
+// --- the public registry -----------------------------------------------------
+
+const publish = (name: string, platform: string, published = true) =>
+  app.request(`/api/skills/${name}/publish`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Cookie: cookie, Origin: ORIGIN },
+    body: JSON.stringify({ platform, published }),
+  });
+
+test("only a proven skill can be published, and the registry needs no session", async () => {
+  // wave on roarm_m2 is proven from the test above; wave on openarm_v1 is not.
+  expect((await publish("wave", "openarm_v1")).status).toBe(409);
+  expect((await publish("nope", "roarm_m2")).status).toBe(404);
+  const res = await publish("wave", "roarm_m2");
+  expect(res.status).toBe(200);
+  expect(await res.json()).toMatchObject({ ok: true, published: true });
+
+  const anyone = await app.request("/api/registry", { headers: { Origin: ORIGIN } });
+  expect(anyone.status).toBe(200);
+  const body = await anyone.json();
+  expect(body.count).toBe(1);
+  expect(body.platforms).toEqual([
+    { name: "roarm_m2", skills: [expect.objectContaining({ name: "wave", platform: "roarm_m2", code: "def run(ctx): return 'roarm2'" })] },
+  ]);
+  // No account id leaks onto the public page.
+  expect(Object.keys(body.platforms[0].skills[0]).sort()).toEqual(["code", "description", "name", "platform", "updatedAt"]);
+  expect((await (await app.request("/api/registry?platform=openarm_v1", { headers: { Origin: ORIGIN } })).json()).count).toBe(0);
+});
+
+test("re-teaching a published skill takes it down until it has run again; unpublishing is explicit too", async () => {
+  expect((await push({ name: "wave", description: "RoArm wave, v3.", code: "def run(ctx): return 'roarm3'", platform: "roarm_m2" })).status).toBe(200);
+  expect((await (await app.request("/api/registry", { headers: { Origin: ORIGIN } })).json()).count).toBe(0);
+  expect((await ran("wave", "roarm_m2")).status).toBe(200);
+  expect((await publish("wave", "roarm_m2")).status).toBe(200);
+  expect((await (await app.request("/api/registry", { headers: { Origin: ORIGIN } })).json()).count).toBe(1);
+  expect((await (await list("roarm_m2")).json()).skills[0].published).toBe(true);
+  expect(await (await publish("wave", "roarm_m2", false)).json()).toMatchObject({ published: false });
+  expect((await (await app.request("/api/registry", { headers: { Origin: ORIGIN } })).json()).count).toBe(0);
+});

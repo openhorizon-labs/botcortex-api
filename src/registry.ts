@@ -11,7 +11,7 @@
  * account's rows back at boot (GET /api/skills) and rebuilds its local
  * store from them when the browser's own copy is gone.
  */
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, desc, eq } from "drizzle-orm";
 
 import { skill } from "./app-schema.js";
 import type { Db } from "./db.js";
@@ -25,6 +25,15 @@ export const UNKNOWN_PLATFORM = "unknown";
 export type SkillUpsert =
   | { ok: true; name: string }
   | { ok: false; status: 400 | 413; error: string };
+
+/** A row on the public registry: everything but who taught it. */
+export type PublishedSkill = {
+  name: string;
+  description: string;
+  code: string;
+  platform: string;
+  updatedAt: number;
+};
 
 export async function upsertSkill(db: Db, userId: string, body: unknown): Promise<SkillUpsert> {
   const { name, description, code, platform, proven } = (body ?? {}) as Record<string, unknown>;
@@ -56,7 +65,10 @@ export async function upsertSkill(db: Db, userId: string, body: unknown): Promis
     })
     .onConflictDoUpdate({
       target: [skill.userId, skill.platform, skill.name],
-      set: { description, code, proven: ran, updatedAt: now },
+      // New code is a new skill as far as the public registry is concerned:
+      // what was published was the version that had run. Re-saving proven
+      // (the store's own copy coming back up) keeps the listing.
+      set: { description, code, proven: ran, updatedAt: now, ...(ran ? {} : { published: false }) },
     });
 
   return { ok: true, name };
@@ -69,6 +81,7 @@ export type SkillRow = {
   code: string;
   platform: string;
   proven: boolean;
+  published: boolean;
   /** Milliseconds since the epoch — the store compares it with a local
    *  file's mtime to decide which copy is newer. */
   updatedAt: number;
@@ -82,11 +95,48 @@ export async function listSkills(db: Db, userId: string, platform?: string): Pro
       code: skill.code,
       platform: skill.platform,
       proven: skill.proven,
+      published: skill.published,
       updatedAt: skill.updatedAt,
     })
     .from(skill)
     .where(platform ? and(eq(skill.userId, userId), eq(skill.platform, platform)) : eq(skill.userId, userId))
     .orderBy(asc(skill.name));
+  return rows.map((row) => ({ ...row, updatedAt: row.updatedAt.getTime() }));
+}
+
+export type PublishOutcome = "published" | "unpublished" | "missing" | "unproven";
+
+/** List a skill on the public registry, or take it down. Only a proven
+ *  skill can go up: "successful" is the registry's one promise. */
+export async function setPublished(
+  db: Db,
+  userId: string,
+  platform: string,
+  name: string,
+  published: boolean,
+): Promise<PublishOutcome> {
+  const where = and(eq(skill.userId, userId), eq(skill.platform, platform), eq(skill.name, name));
+  const [row] = await db.select({ proven: skill.proven }).from(skill).where(where).limit(1);
+  if (!row) return "missing";
+  if (published && !row.proven) return "unproven";
+  await db.update(skill).set({ published }).where(where);
+  return published ? "published" : "unpublished";
+}
+
+/** The public registry: every published skill, newest first within an
+ *  arm. No account ids, no session — this is the page anyone can read. */
+export async function publishedSkills(db: Db, platform?: string): Promise<PublishedSkill[]> {
+  const rows = await db
+    .select({
+      name: skill.name,
+      description: skill.description,
+      code: skill.code,
+      platform: skill.platform,
+      updatedAt: skill.updatedAt,
+    })
+    .from(skill)
+    .where(platform ? and(eq(skill.published, true), eq(skill.platform, platform)) : eq(skill.published, true))
+    .orderBy(asc(skill.platform), desc(skill.updatedAt), asc(skill.name));
   return rows.map((row) => ({ ...row, updatedAt: row.updatedAt.getTime() }));
 }
 

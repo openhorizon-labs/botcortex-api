@@ -12,6 +12,7 @@ import { cors } from "hono/cors";
 import type { Db } from "./db.js";
 import { accountRoutes } from "./routes/account.js";
 import { pairingRoutes } from "./routes/pairing.js";
+import { registryRoutes } from "./routes/registry.js";
 import { robotRoutes } from "./routes/robot.js";
 
 /** The slice of a Better Auth instance the app actually uses — structural,
@@ -50,6 +51,10 @@ export function createApp(auth: AuthLike, origins: string[], db: Db) {
     if (!session) return c.json({ user: null }, 401);
     return c.json({ user: session.user });
   });
+
+  // The public registry has no session and must be mounted BEFORE the
+  // account routes, whose guard answers 401 for every /api path it sees.
+  app.route("/api", registryRoutes(db));
 
   // Registered after the handlers above so their terminating responses win;
   // this sub-app's session guard only ever runs for its own paths.

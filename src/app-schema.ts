@@ -121,6 +121,10 @@ export const skill = pgTable(
      *  mark, carried with the copy so a restored skill is listed the way it
      *  was listed where it was taught, not as a fresh unproven draft. */
     proven: boolean("proven").notNull().default(false),
+    /** Listed on the public skill registry (botcortex.dev/skills). Set by
+     *  the owner, only ever on a proven skill: the registry is the record
+     *  of what has actually run, per arm, not a drafts folder. */
+    published: boolean("published").notNull().default(false),
     createdAt: timestamp("created_at").notNull().defaultNow(),
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
   },

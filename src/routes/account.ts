@@ -21,7 +21,7 @@ import {
 import { meteredProxy } from "../inference.js";
 import { mintKey } from "../keys.js";
 import { ALLOWED_MODELS, DEFAULT_MODEL, catalogue } from "../pricing.js";
-import { UNKNOWN_PLATFORM, listSkills, markSkillRan, upsertSkill } from "../registry.js";
+import { UNKNOWN_PLATFORM, listSkills, markSkillRan, setPublished, upsertSkill } from "../registry.js";
 import { conversation, message, robot, robotKey } from "../app-schema.js";
 
 type Env = { Variables: { userId: string } };
@@ -101,6 +101,21 @@ export function accountRoutes(auth: AuthLike, db: Db) {
   /** The store's proof mark, mirrored: the sim saw this skill run to
    *  completion, so the registry copy is listed as proven too. 404 when the
    *  registry never received the skill, so the sim can push it up instead. */
+  /** Put a skill on the public registry, or take it down. Refused for a
+   *  skill that has never been seen to run: the registry lists what works. */
+  app.post("/skills/:name/publish", async (c) => {
+    const body = (await c.req.json().catch(() => null)) as { platform?: unknown; published?: unknown } | null;
+    const platform = typeof body?.platform === "string" && body.platform ? body.platform : UNKNOWN_PLATFORM;
+    const published = body?.published !== false;
+    const name = c.req.param("name");
+    const outcome = await setPublished(db, c.get("userId"), platform, name, published);
+    if (outcome === "missing") return c.json({ error: `no skill named ${name} for ${platform} in this account` }, 404);
+    if (outcome === "unproven") {
+      return c.json({ error: `${name} has never run successfully on ${platform}; run it before publishing` }, 409);
+    }
+    return c.json({ ok: true, name, published: outcome === "published" });
+  });
+
   app.post("/skills/:name/ran", async (c) => {
     const body = (await c.req.json().catch(() => null)) as { platform?: unknown } | null;
     const platform = typeof body?.platform === "string" && body.platform ? body.platform : UNKNOWN_PLATFORM;

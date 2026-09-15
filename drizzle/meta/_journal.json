@@ -57,6 +57,13 @@
       "when": 1789489982507,
       "tag": "0007_great_shooting_star",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1789501129481,
+      "tag": "0008_sour_korvac",
+      "breakpoints": true
     }
   ]
 }
