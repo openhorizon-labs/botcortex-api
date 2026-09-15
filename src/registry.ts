@@ -60,15 +60,16 @@ export async function upsertSkill(db: Db, userId: string, body: unknown): Promis
       code,
       platform: typeof platform === "string" && platform ? platform : UNKNOWN_PLATFORM,
       proven: ran,
+      published: ran,
       createdAt: now,
       updatedAt: now,
     })
     .onConflictDoUpdate({
       target: [skill.userId, skill.platform, skill.name],
-      // New code is a new skill as far as the public registry is concerned:
-      // what was published was the version that had run. Re-saving proven
-      // (the store's own copy coming back up) keeps the listing.
-      set: { description, code, proven: ran, updatedAt: now, ...(ran ? {} : { published: false }) },
+      // The registry lists what has run, by default (Sai, Sep 16): a copy
+      // arriving proven is published; new code is unproven and comes down
+      // until it has run again, when the proof mark puts it back up.
+      set: { description, code, proven: ran, updatedAt: now, published: ran },
     });
 
   return { ok: true, name };
@@ -106,8 +107,10 @@ export async function listSkills(db: Db, userId: string, platform?: string): Pro
 
 export type PublishOutcome = "published" | "unpublished" | "missing" | "unproven";
 
-/** List a skill on the public registry, or take it down. Only a proven
- *  skill can go up: "successful" is the registry's one promise. */
+/** Put a skill back on the public registry, or take it down. Publishing
+ *  is automatic on the first successful run; this is the owner's override
+ *  either way. Only a proven skill can go up: "successful" is the
+ *  registry's one promise. */
 export async function setPublished(
   db: Db,
   userId: string,
@@ -140,11 +143,14 @@ export async function publishedSkills(db: Db, platform?: string): Promise<Publis
   return rows.map((row) => ({ ...row, updatedAt: row.updatedAt.getTime() }));
 }
 
-/** The store's mark_ran, for the registry copy. False when no such row. */
+/** The store's mark_ran, for the registry copy. False when no such row.
+ *  A skill seen to run is published in the same stroke: every successful
+ *  skill, on any robot, by any owner, is on the public registry unless
+ *  its owner takes it down. */
 export async function markSkillRan(db: Db, userId: string, platform: string, name: string): Promise<boolean> {
   const rows = await db
     .update(skill)
-    .set({ proven: true })
+    .set({ proven: true, published: true })
     .where(and(eq(skill.userId, userId), eq(skill.platform, platform), eq(skill.name, name)))
     // Zero-argument, the way this drizzle types it (see commit 38a3660).
     .returning();

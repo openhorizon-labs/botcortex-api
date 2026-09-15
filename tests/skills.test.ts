@@ -147,10 +147,15 @@ const publish = (name: string, platform: string, published = true) =>
     body: JSON.stringify({ platform, published }),
   });
 
-test("only a proven skill can be published, and the registry needs no session", async () => {
-  // wave on roarm_m2 is proven from the test above; wave on openarm_v1 is not.
+test("a successful run publishes by default; only a proven skill can be listed; the registry needs no session", async () => {
+  // wave on roarm_m2 ran in the test above and is therefore already listed;
+  // wave on openarm_v1 never ran.
+  expect((await (await app.request("/api/registry", { headers: { Origin: ORIGIN } })).json()).count).toBe(1);
   expect((await publish("wave", "openarm_v1")).status).toBe(409);
   expect((await publish("nope", "roarm_m2")).status).toBe(404);
+  // Taking it down is the owner's call, and putting it back is too.
+  expect(await (await publish("wave", "roarm_m2", false)).json()).toMatchObject({ ok: true, published: false });
+  expect((await (await app.request("/api/registry", { headers: { Origin: ORIGIN } })).json()).count).toBe(0);
   const res = await publish("wave", "roarm_m2");
   expect(res.status).toBe(200);
   expect(await res.json()).toMatchObject({ ok: true, published: true });
@@ -167,13 +172,16 @@ test("only a proven skill can be published, and the registry needs no session", 
   expect((await (await app.request("/api/registry?platform=openarm_v1", { headers: { Origin: ORIGIN } })).json()).count).toBe(0);
 });
 
-test("re-teaching a published skill takes it down until it has run again; unpublishing is explicit too", async () => {
+test("re-teaching a published skill takes it down until it has run again, and the run puts it back", async () => {
   expect((await push({ name: "wave", description: "RoArm wave, v3.", code: "def run(ctx): return 'roarm3'", platform: "roarm_m2" })).status).toBe(200);
   expect((await (await app.request("/api/registry", { headers: { Origin: ORIGIN } })).json()).count).toBe(0);
   expect((await ran("wave", "roarm_m2")).status).toBe(200);
-  expect((await publish("wave", "roarm_m2")).status).toBe(200);
   expect((await (await app.request("/api/registry", { headers: { Origin: ORIGIN } })).json()).count).toBe(1);
-  expect((await (await list("roarm_m2")).json()).skills[0].published).toBe(true);
+  // A copy pushed up already proven (a store restoring its skills) is listed too.
+  expect((await push({ name: "lift", description: "Lift.", code: "def run(ctx): pass", platform: "roarm_m2", proven: true })).status).toBe(200);
+  expect((await (await app.request("/api/registry", { headers: { Origin: ORIGIN } })).json()).count).toBe(2);
+  expect(await (await publish("lift", "roarm_m2", false)).json()).toMatchObject({ published: false });
+  expect((await (await list("roarm_m2")).json()).skills.find((s: { name: string }) => s.name === "wave").published).toBe(true);
   expect(await (await publish("wave", "roarm_m2", false)).json()).toMatchObject({ published: false });
   expect((await (await app.request("/api/registry", { headers: { Origin: ORIGIN } })).json()).count).toBe(0);
 });
