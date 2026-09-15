@@ -52,6 +52,7 @@ test("re-teaching updates the row rather than duplicating it", async () => {
     name: "wave_hello",
     description: "Wave twice.",
     code: "def run(ctx): return 2",
+    platform: "openarm_v1",
   });
   expect(res.status).toBe(200);
 
@@ -76,4 +77,63 @@ test("an oversized skill is refused, not truncated", async () => {
     code: "#".repeat(MAX_SKILL_CHARS),
   });
   expect(res.status).toBe(413);
+});
+
+// --- the read-back door: what a boot rebuilds its store from ------------------
+
+const list = (platform?: string) =>
+  app.request(`/api/skills${platform ? `?platform=${platform}` : ""}`, {
+    headers: { Cookie: cookie, Origin: ORIGIN },
+  });
+
+const ran = (name: string, platform: string) =>
+  app.request(`/api/skills/${name}/ran`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Cookie: cookie, Origin: ORIGIN },
+    body: JSON.stringify({ platform }),
+  });
+
+test("the same name on two bodies is two skills", async () => {
+  expect((await push({ name: "wave", description: "OpenArm wave.", code: "def run(ctx): return 'openarm'", platform: "openarm_v1" })).status).toBe(200);
+  expect((await push({ name: "wave", description: "RoArm wave.", code: "def run(ctx): return 'roarm'", platform: "roarm_m2" })).status).toBe(200);
+
+  const roarm = await (await list("roarm_m2")).json();
+  expect(roarm.skills.map((s: { name: string }) => s.name)).toEqual(["wave"]);
+  expect(roarm.skills[0]).toMatchObject({ code: "def run(ctx): return 'roarm'", platform: "roarm_m2", proven: false });
+  expect(typeof roarm.skills[0].updatedAt).toBe("number");
+
+  const openarm = await (await list("openarm_v1")).json();
+  expect(openarm.skills.find((s: { name: string }) => s.name === "wave").code).toBe("def run(ctx): return 'openarm'");
+
+  const everything = await (await list()).json();
+  expect(everything.skills.filter((s: { name: string }) => s.name === "wave")).toHaveLength(2);
+});
+
+test("a run marks the registry copy proven; re-teaching drops the mark", async () => {
+  expect((await ran("wave", "roarm_m2")).status).toBe(200);
+  let rows = (await (await list("roarm_m2")).json()).skills;
+  expect(rows[0].proven).toBe(true);
+  // The other body's copy did not run.
+  rows = (await (await list("openarm_v1")).json()).skills;
+  expect(rows.find((s: { name: string }) => s.name === "wave").proven).toBe(false);
+
+  expect((await push({ name: "wave", description: "RoArm wave, faster.", code: "def run(ctx): return 'roarm2'", platform: "roarm_m2" })).status).toBe(200);
+  rows = (await (await list("roarm_m2")).json()).skills;
+  expect(rows[0].proven).toBe(false);
+
+  // A copy pushed up by a store that saw it run arrives proven.
+  expect((await push({ name: "wave", description: "RoArm wave, faster.", code: "def run(ctx): return 'roarm2'", platform: "roarm_m2", proven: true })).status).toBe(200);
+  rows = (await (await list("roarm_m2")).json()).skills;
+  expect(rows[0].proven).toBe(true);
+});
+
+test("marking a skill the registry never received is a 404, not a silent no-op", async () => {
+  expect((await ran("never_sent", "roarm_m2")).status).toBe(404);
+});
+
+test("the read-back is scoped to the session's account", async () => {
+  const other = await signUp(app, "someone-else@example.com");
+  const res = await app.request("/api/skills", { headers: { Cookie: other, Origin: ORIGIN } });
+  expect((await res.json()).skills).toEqual([]);
+  expect((await app.request("/api/skills", { headers: { Origin: ORIGIN } })).status).toBe(401);
 });

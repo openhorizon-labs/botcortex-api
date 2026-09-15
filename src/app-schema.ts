@@ -12,6 +12,7 @@ import { relations } from "drizzle-orm";
 import {
   bigint,
   bigserial,
+  boolean,
   index,
   integer,
   jsonb,
@@ -95,8 +96,15 @@ export const usage = pgTable(
 /**
  * A skill the agent authored on a robot, synced up for the registry.
  *
- * The robot keeps the original on disk and runs from there — this is a copy,
- * not the source of truth. Sync failing must never break a teach.
+ * The robot runs from its own copy on disk; this row is the one that
+ * outlives that disk. A browser whose IndexedDB was cleared, a new laptop,
+ * a robot re-imaged — all of them read their skills back from here at boot,
+ * so a taught skill is never lost with the machine it was taught on. Sync
+ * failing must still never break a teach.
+ *
+ * Keyed per BODY (audit: platform is part of the key): a skill is written
+ * for the arm it was taught on, and "wave" on the OpenArm is a different
+ * program from "wave" on the RoArm. One user, one platform, one name.
  */
 export const skill = pgTable(
   "skill",
@@ -109,10 +117,14 @@ export const skill = pgTable(
     description: text("description").notNull(),
     code: text("code").notNull(),
     platform: text("platform").notNull(),
+    /** This exact code ran to completion at least once — the store's `.ran`
+     *  mark, carried with the copy so a restored skill is listed the way it
+     *  was listed where it was taught, not as a fresh unproven draft. */
+    proven: boolean("proven").notNull().default(false),
     createdAt: timestamp("created_at").notNull().defaultNow(),
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
   },
-  (t) => [uniqueIndex("skill_user_name_idx").on(t.userId, t.name)],
+  (t) => [uniqueIndex("skill_user_platform_name_idx").on(t.userId, t.platform, t.name)],
 );
 
 /**

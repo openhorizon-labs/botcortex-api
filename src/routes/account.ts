@@ -21,7 +21,7 @@ import {
 import { meteredProxy } from "../inference.js";
 import { mintKey } from "../keys.js";
 import { ALLOWED_MODELS, DEFAULT_MODEL, catalogue } from "../pricing.js";
-import { upsertSkill } from "../registry.js";
+import { UNKNOWN_PLATFORM, listSkills, markSkillRan, upsertSkill } from "../registry.js";
 import { conversation, message, robot, robotKey } from "../app-schema.js";
 
 type Env = { Variables: { userId: string } };
@@ -88,6 +88,27 @@ export function accountRoutes(auth: AuthLike, db: Db) {
     );
     if (!result.ok) return c.json({ error: result.error }, result.status);
     return c.json({ ok: true, name: result.name });
+  });
+
+  /** The other direction: what the browser sim reads at boot to rebuild
+   *  its local store. `?platform=` narrows to one body, which is how the
+   *  sim asks — it only wants the skills written for the arm it loaded. */
+  app.get("/skills", async (c) => {
+    const platform = c.req.query("platform") || undefined;
+    return c.json({ skills: await listSkills(db, c.get("userId"), platform) });
+  });
+
+  /** The store's proof mark, mirrored: the sim saw this skill run to
+   *  completion, so the registry copy is listed as proven too. 404 when the
+   *  registry never received the skill, so the sim can push it up instead. */
+  app.post("/skills/:name/ran", async (c) => {
+    const body = (await c.req.json().catch(() => null)) as { platform?: unknown } | null;
+    const platform = typeof body?.platform === "string" && body.platform ? body.platform : UNKNOWN_PLATFORM;
+    const name = c.req.param("name");
+    if (!(await markSkillRan(db, c.get("userId"), platform, name))) {
+      return c.json({ error: `no skill named ${name} for ${platform} in this account` }, 404);
+    }
+    return c.json({ ok: true, name });
   });
 
   app.delete("/keys/:id", async (c) => {
