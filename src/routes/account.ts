@@ -156,6 +156,19 @@ export function accountRoutes(auth: AuthLike, db: Db) {
     return c.json({ robots });
   });
 
+  /** Forget a paired robot. Its row only: the key it registered with stays
+   *  until revoked under /keys, and a robot that boots again with that key
+   *  re-announces itself. What this removes is a stale entry — a laptop that
+   *  served the runtime once and never will again — from the sidebar list. */
+  app.delete("/robots/:id", async (c) => {
+    const gone = await db
+      .delete(robot)
+      .where(and(eq(robot.userId, c.get("userId")), eq(robot.id, c.req.param("id"))))
+      .returning();
+    if (gone.length === 0) return c.json({ error: "no such robot in this account" }, 404);
+    return c.json({ ok: true, id: gone[0].id });
+  });
+
   /** What is asking to be paired, for the approval screen. Returns the name
    *  the robot gave itself — "approve thor-rig", not "approve some device". */
   app.get("/device/pending", async (c) => {

@@ -200,3 +200,26 @@ test("registration requires a robot key, not just any session", async () => {
   );
   expect(res.status).toBe(401);
 });
+
+test("an owner can forget a paired robot; nobody else can", async () => {
+  const list = await app.request("/api/robots", { headers: { Cookie: cookie, Origin: ORIGIN } });
+  const { robots } = await list.json();
+  const bench = robots.find((r: { name: string }) => r.name === "bench-arm");
+  expect(bench).toBeDefined();
+
+  const stranger = await signUp(app, "stranger@example.com");
+  const refused = await app.request(`/api/robots/${bench.id}`, {
+    method: "DELETE",
+    headers: { Cookie: stranger, Origin: ORIGIN },
+  });
+  expect(refused.status).toBe(404);
+
+  const forgotten = await app.request(`/api/robots/${bench.id}`, {
+    method: "DELETE",
+    headers: { Cookie: cookie, Origin: ORIGIN },
+  });
+  expect(forgotten.status).toBe(200);
+  const after = await (await app.request("/api/robots", { headers: { Cookie: cookie, Origin: ORIGIN } })).json();
+  expect(after.robots.find((r: { name: string }) => r.name === "bench-arm")).toBeUndefined();
+  expect((await app.request(`/api/robots/${bench.id}`, { method: "DELETE", headers: { Cookie: cookie, Origin: ORIGIN } })).status).toBe(404);
+});
