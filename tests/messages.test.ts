@@ -244,3 +244,20 @@ test("ordinary messages are unaffected and default to text", async () => {
   expect((only as any).kind).toBe("text");
   expect((only as any).payload).toBeNull();
 });
+
+
+test("a task belongs to the robot it was taught on, and the list narrows to one body", async () => {
+  const roarm = (await (await json("/api/conversations", { platform: "roarm_m2" }, cookie)).json()).id as string;
+  const openarm = (await (await json("/api/conversations", { platform: "openarm_v1" }, cookie)).json()).id as string;
+  const untagged = await newConversation();
+  await say(roarm, "owner", "wave");
+  await say(openarm, "owner", "wave");
+  await say(untagged, "owner", "wave");
+  const all = await listConversations();
+  expect(all.map((c) => c.id)).toEqual(expect.arrayContaining([roarm, openarm, untagged]));
+  const only = (await (
+    await app.request("/api/conversations?platform=roarm_m2", { headers: { Cookie: cookie, Origin: ORIGIN } })
+  ).json()).conversations as { id: string; platform: string | null }[];
+  expect(only.map((c) => c.id)).toEqual([roarm]);
+  expect(only[0].platform).toBe("roarm_m2");
+});

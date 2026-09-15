@@ -200,11 +200,19 @@ export const conversation = pgTable(
       .notNull()
       .references(() => user.id, { onDelete: "cascade" }),
     title: text("title"),
+    /** The body the task was taught on (a platform name such as roarm_m2).
+     *  A task is a conversation with ONE robot: the sidebar lists the tasks
+     *  of the robot that is connected, not everything the owner ever said
+     *  to any robot. Null for tasks from before this was recorded. */
+    platform: text("platform"),
     createdAt: timestamp("created_at").notNull().defaultNow(),
     /** Bumped on every message, so the sidebar sorts by recent activity. */
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
   },
-  (t) => [index("conversation_user_idx").on(t.userId, t.updatedAt)],
+  (t) => [
+    index("conversation_user_idx").on(t.userId, t.updatedAt),
+    index("conversation_user_platform_idx").on(t.userId, t.platform),
+  ],
 );
 
 export const conversationRelations = relations(conversation, ({ one, many }) => ({

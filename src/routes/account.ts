@@ -186,10 +186,16 @@ export function accountRoutes(auth: AuthLike, db: Db) {
    *  Empty ones are omitted — an untouched "New task" should not leave a
    *  blank row behind in the sidebar. */
   app.get("/conversations", async (c) => {
+    // `?platform=` narrows to the tasks taught on one body. Tasks recorded
+    // before the body was noted carry no platform and are not listed
+    // under any; they stay reachable by id.
+    const platform = c.req.query("platform") || undefined;
+    const owner = eq(conversation.userId, c.get("userId"));
     const rows = await db
       .select({
         id: conversation.id,
         title: conversation.title,
+        platform: conversation.platform,
         updatedAt: conversation.updatedAt,
         // Only real messages decide whether a task is worth listing. Tool
         // rows are machinery — a task showing nothing but the agent's
@@ -198,7 +204,7 @@ export function accountRoutes(auth: AuthLike, db: Db) {
       })
       .from(conversation)
       .leftJoin(message, eq(message.conversationId, conversation.id))
-      .where(eq(conversation.userId, c.get("userId")))
+      .where(platform ? and(owner, eq(conversation.platform, platform)) : owner)
       .groupBy(conversation.id)
       .orderBy(desc(conversation.updatedAt));
     return c.json({
@@ -210,8 +216,10 @@ export function accountRoutes(auth: AuthLike, db: Db) {
 
   app.post("/conversations", async (c) => {
     const id = crypto.randomUUID();
-    await db.insert(conversation).values({ id, userId: c.get("userId") });
-    return c.json({ id }, 201);
+    const body = (await c.req.json().catch(() => null)) as { platform?: unknown } | null;
+    const platform = typeof body?.platform === "string" && body.platform ? body.platform : null;
+    await db.insert(conversation).values({ id, userId: c.get("userId"), platform });
+    return c.json({ id, platform }, 201);
   });
 
   app.delete("/conversations/:id", async (c) => {
