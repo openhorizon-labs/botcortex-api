@@ -153,9 +153,14 @@ test("a successful run publishes by default; only a proven skill can be listed; 
   expect((await (await app.request("/api/registry", { headers: { Origin: ORIGIN } })).json()).count).toBe(1);
   expect((await publish("wave", "openarm_v1")).status).toBe(409);
   expect((await publish("nope", "roarm_m2")).status).toBe(404);
-  // Taking it down is the owner's call, and putting it back is too.
-  expect(await (await publish("wave", "roarm_m2", false)).json()).toMatchObject({ ok: true, published: false });
-  expect((await (await app.request("/api/registry", { headers: { Origin: ORIGIN } })).json()).count).toBe(0);
+  // Taking it down is NOT the owner's call: every skill that runs joins the
+  // registry, which is the only reason the registry is worth reading. The app
+  // disables its control and the endpoint refuses, so calling it directly is
+  // not a way round the disabled button.
+  const down = await publish("wave", "roarm_m2", false);
+  expect(down.status).toBe(402);
+  expect(await down.json()).toMatchObject({ code: "unpublish_not_available" });
+  expect((await (await app.request("/api/registry", { headers: { Origin: ORIGIN } })).json()).count).toBe(1);
   const res = await publish("wave", "roarm_m2");
   expect(res.status).toBe(200);
   expect(await res.json()).toMatchObject({ ok: true, published: true });
@@ -180,8 +185,19 @@ test("re-teaching a published skill takes it down until it has run again, and th
   // A copy pushed up already proven (a store restoring its skills) is listed too.
   expect((await push({ name: "lift", description: "Lift.", code: "def run(ctx): pass", platform: "roarm_m2", proven: true })).status).toBe(200);
   expect((await (await app.request("/api/registry", { headers: { Origin: ORIGIN } })).json()).count).toBe(2);
-  expect(await (await publish("lift", "roarm_m2", false)).json()).toMatchObject({ published: false });
+  // Neither can be withdrawn, so both stay listed.
+  expect((await publish("lift", "roarm_m2", false)).status).toBe(402);
   expect((await (await list("roarm_m2")).json()).skills.find((s: { name: string }) => s.name === "wave").published).toBe(true);
-  expect(await (await publish("wave", "roarm_m2", false)).json()).toMatchObject({ published: false });
-  expect((await (await app.request("/api/registry", { headers: { Origin: ORIGIN } })).json()).count).toBe(0);
+  expect((await publish("wave", "roarm_m2", false)).status).toBe(402);
+  expect((await (await app.request("/api/registry", { headers: { Origin: ORIGIN } })).json()).count).toBe(2);
+});
+
+test("re-teaching still takes a skill down until it runs again — the automatic path is untouched", async () => {
+  // The only thing that unlists a skill is editing it, and only until the new
+  // version has run. That is the runtime's own bookkeeping, not an owner
+  // withdrawing work, so the 402 above must not have broken it.
+  expect((await push({ name: "lift", description: "Lift, v2.", code: "def run(ctx): return 2", platform: "roarm_m2" })).status).toBe(200);
+  expect((await (await list("roarm_m2")).json()).skills.find((s: { name: string }) => s.name === "lift").published).toBe(false);
+  expect((await ran("lift", "roarm_m2")).status).toBe(200);
+  expect((await (await list("roarm_m2")).json()).skills.find((s: { name: string }) => s.name === "lift").published).toBe(true);
 });

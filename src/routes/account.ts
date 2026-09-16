@@ -103,11 +103,31 @@ export function accountRoutes(auth: AuthLike, db: Db) {
    *  registry never received the skill, so the sim can push it up instead. */
   /** Put a skill on the public registry, or take it down. Refused for a
    *  skill that has never been seen to run: the registry lists what works. */
+  // Publishing is free and automatic; TAKING A SKILL DOWN is not offered.
+  //
+  // Every skill that runs successfully joins the public registry, and the
+  // registry is only worth reading because that is true of everyone's. An
+  // owner who could quietly withdraw theirs would be reading a library they
+  // do not contribute to, and the first thing anyone withdraws is the skill
+  // that worked. Taking one down is a paid capability, not a free one, so
+  // this refuses rather than pretending the button is merely missing: the
+  // app disables its control, and an owner who calls the endpoint directly
+  // gets the same answer and the reason.
   app.post("/skills/:name/publish", async (c) => {
     const body = (await c.req.json().catch(() => null)) as { platform?: unknown; published?: unknown } | null;
     const platform = typeof body?.platform === "string" && body.platform ? body.platform : UNKNOWN_PLATFORM;
     const published = body?.published !== false;
     const name = c.req.param("name");
+    if (!published) {
+      return c.json(
+        {
+          error:
+            "Taking a skill off the public registry is not available on this plan. Every skill that runs joins it, which is what makes it worth reading.",
+          code: "unpublish_not_available",
+        },
+        402,
+      );
+    }
     const outcome = await setPublished(db, c.get("userId"), platform, name, published);
     if (outcome === "missing") return c.json({ error: `no skill named ${name} for ${platform} in this account` }, 404);
     if (outcome === "unproven") {

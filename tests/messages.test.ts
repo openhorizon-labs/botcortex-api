@@ -250,9 +250,13 @@ test("a task belongs to the robot it was taught on, and the list narrows to one 
   const roarm = (await (await json("/api/conversations", { platform: "roarm_m2" }, cookie)).json()).id as string;
   const openarm = (await (await json("/api/conversations", { platform: "openarm_v1" }, cookie)).json()).id as string;
   const untagged = await newConversation();
-  await say(roarm, "owner", "wave");
-  await say(openarm, "owner", "wave");
-  await say(untagged, "owner", "wave");
+  // "you", not "owner": the api takes 'you' or 'robot' and rejects anything
+  // else. This test shipped asking for "owner", so all three posts 400'd, all
+  // three tasks had no text message, and the list this test is about left
+  // them out — which is exactly what it then failed on.
+  expect((await say(roarm, "you", "wave")).status).toBe(200);
+  expect((await say(openarm, "you", "wave")).status).toBe(200);
+  expect((await say(untagged, "you", "wave")).status).toBe(200);
   const all = await listConversations();
   expect(all.map((c) => c.id)).toEqual(expect.arrayContaining([roarm, openarm, untagged]));
   const only = (await (
