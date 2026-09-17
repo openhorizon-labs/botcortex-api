@@ -10,7 +10,7 @@ import { beforeAll, expect, test } from "bun:test";
 import { eq } from "drizzle-orm";
 
 import { ORIGIN, makeApp, signUp } from "./harness.js";
-import { MAX_SKILL_CHARS } from "../src/registry.js";
+import { MAX_SKILL_CHARS, handleFor } from "../src/registry.js";
 import { skill } from "../src/app-schema.js";
 
 let app: Awaited<ReturnType<typeof makeApp>>["app"];
@@ -179,7 +179,16 @@ test("a successful run publishes by default; only a proven skill can be listed; 
   const id = body.platforms[0].skills[0].id as string;
   const one = await app.request(`/api/registry/skills/${id}`, { headers: { Origin: ORIGIN } });
   expect(one.status).toBe(200);
-  expect((await one.json()).skill).toMatchObject({ id, name: "wave", platform: "roarm_m2" });
+  const shown = (await one.json()).skill;
+  expect(shown).toMatchObject({ id, name: "wave", platform: "roarm_m2" });
+  // One skill's page names its author: the name they signed up with, a handle
+  // made from it, and what they have done in public. Never the email, never
+  // the account id — by key or by value.
+  expect(Object.keys(shown.author).sort()).toEqual(["handle", "joinedAt", "name", "platforms", "skills"]);
+  expect(shown.author.handle).toBe(handleFor(shown.author.name));
+  expect(shown.author).toMatchObject({ skills: 1, platforms: ["roarm_m2"] });
+  expect(Object.keys(shown)).not.toContain("userId");
+  expect(JSON.stringify(shown)).not.toContain("@");
   expect((await app.request("/api/registry/skills/not-a-skill", { headers: { Origin: ORIGIN } })).status).toBe(404);
   expect((await (await app.request("/api/registry?platform=openarm_v1", { headers: { Origin: ORIGIN } })).json()).count).toBe(0);
 });
@@ -207,4 +216,12 @@ test("re-teaching still takes a skill down until it runs again — the automatic
   expect((await (await list("roarm_m2")).json()).skills.find((s: { name: string }) => s.name === "lift").published).toBe(false);
   expect((await ran("lift", "roarm_m2")).status).toBe(200);
   expect((await (await list("roarm_m2")).json()).skills.find((s: { name: string }) => s.name === "lift").published).toBe(true);
+});
+
+test("a handle is the first word of the name, and never empty", () => {
+  expect(handleFor("Saidev Dhal (Dev)")).toBe("saidev");
+  expect(handleFor("  José  Núñez ")).toBe("jose");
+  expect(handleFor("李 雷")).toBe("李");
+  expect(handleFor("!!! ???")).toBe("someone");
+  expect(handleFor("")).toBe("someone");
 });

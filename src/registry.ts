@@ -14,6 +14,7 @@
 import { and, asc, desc, eq } from "drizzle-orm";
 
 import { skill } from "./app-schema.js";
+import { user } from "./auth-schema.js";
 import type { Db } from "./db.js";
 
 /** Roughly a long authored skill plus its metadata. */
@@ -26,7 +27,35 @@ export type SkillUpsert =
   | { ok: true; name: string }
   | { ok: false; status: 400 | 413; error: string };
 
-/** A row on the public registry: everything but who taught it. */
+/**
+ * Who taught a skill, as the public sees them (Sai, Sep 17: a skill page names
+ * its author, with a card on hover).
+ *
+ * Made ONLY of things the person typed as their name or did in public: never
+ * the email, never the account id. The handle is a way to say the name, not an
+ * address: two people called Sam are both "@sam", and nothing is looked up by it.
+ */
+export type SkillAuthor = {
+  handle: string;
+  name: string;
+  /** Milliseconds since the epoch. */
+  joinedAt: number;
+  /** How many skills they have on the public registry, this one included. */
+  skills: number;
+  /** The arms those skills were proven on. */
+  platforms: string[];
+};
+
+/** "Saidev Dhal (Dev)" -> "saidev". The first word of the name, reduced to
+ *  what a handle can hold; a name with nothing usable in it is "someone". */
+export function handleFor(name: string): string {
+  const first = name.trim().split(/\s+/)[0] ?? "";
+  const handle = first.normalize("NFKD").toLowerCase().replace(/[^\p{L}\p{N}_]/gu, "").slice(0, 24);
+  return handle || "someone";
+}
+
+/** A row on the public registry. The list carries no author; one skill's own
+ *  page does. */
 export type PublishedSkill = {
   id: string;
   name: string;
@@ -34,6 +63,7 @@ export type PublishedSkill = {
   code: string;
   platform: string;
   updatedAt: number;
+  author?: SkillAuthor;
 };
 
 export async function upsertSkill(db: Db, userId: string, body: unknown): Promise<SkillUpsert> {
@@ -160,11 +190,32 @@ export async function publishedSkill(db: Db, id: string): Promise<PublishedSkill
       code: skill.code,
       platform: skill.platform,
       updatedAt: skill.updatedAt,
+      userId: skill.userId,
+      authorName: user.name,
+      authorSince: user.createdAt,
     })
     .from(skill)
+    .innerJoin(user, eq(user.id, skill.userId))
     .where(and(eq(skill.id, id), eq(skill.published, true)))
     .limit(1);
-  return row ? { ...row, updatedAt: row.updatedAt.getTime() } : null;
+  if (!row) return null;
+  const theirs = await db
+    .select({ platform: skill.platform })
+    .from(skill)
+    .where(and(eq(skill.userId, row.userId), eq(skill.published, true)));
+  // The account id is read to count with and goes no further than this line.
+  const { userId: _userId, authorName, authorSince, ...published } = row;
+  return {
+    ...published,
+    updatedAt: row.updatedAt.getTime(),
+    author: {
+      handle: handleFor(authorName),
+      name: authorName,
+      joinedAt: authorSince.getTime(),
+      skills: theirs.length,
+      platforms: [...new Set(theirs.map((s) => s.platform))].sort(),
+    },
+  };
 }
 
 /** The store's mark_ran, for the registry copy. False when no such row.
