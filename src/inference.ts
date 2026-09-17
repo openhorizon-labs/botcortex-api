@@ -12,7 +12,6 @@
  * allowlist, the provider match, the balance ceiling — is here, once. Two
  * copies of a billing gate is how one of them quietly stops charging.
  */
-import { anthropicChat } from "./anthropic-chat.js";
 import { readOwnKey, type OwnKey } from "./byok.js";
 import type { Db } from "./db.js";
 import { balanceFor, formatMicrosPrecise, recordUsage } from "./credits.js";
@@ -115,13 +114,9 @@ function fail(status: number, type: string, message: string): Response {
 
 /**
  * One call, paid for by the owner's own key. Null when their key cannot serve
- * this door (an OpenAI key asked for a native Anthropic call), in which case
- * the caller carries on to the credit path.
- *
- * `door` is the wire format the caller spoke: "openai" is chat completions
- * (the browser's agent loop), "anthropic" is the Messages API (the runtime's
- * tool runner). An Anthropic key behind the chat-completions door is
- * translated — see anthropic-chat.ts.
+ * this door — it is an OpenAI key, and the runtime's native Anthropic door is
+ * not something it can pay for — in which case the caller carries on to the
+ * credit path.
  */
 async function withOwnKey(
   db: Db,
@@ -131,11 +126,6 @@ async function withOwnKey(
   body: any,
   request: Request,
 ): Promise<Response | null> {
-  if (own.provider === "anthropic" && door === "openai") {
-    const response = await anthropicChat(own.secret, body);
-    if (response.ok) await noteOwnUsage(db, caller, await response.clone().json(), "openai");
-    return response;
-  }
   if (own.provider !== door) return null;
 
   const upstream = await fetch(upstreamFor(door), {

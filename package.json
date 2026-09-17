@@ -12,7 +12,6 @@
     "auth:schema": "bunx auth@latest generate --config src/auth.ts --output src/auth-schema.ts"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.126.0",
     "@electric-sql/pglite": "^0.5.4",
     "better-auth": "^1.6.25",
     "drizzle-orm": "^0.45.2",

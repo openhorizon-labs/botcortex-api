@@ -12,12 +12,16 @@
  * every device separately, and it needed Anthropic's "dangerous direct browser
  * access" header to work at all.)
  *
- * The owner is asked for the key and nothing else. Which provider it belongs
- * to is read off the key; which model to use is ours to choose well.
+ * The owner is asked for the key and nothing else. OpenAI keys only, for now
+ * (Sai, Sep 17): nothing is inferred from what a key looks like — key formats
+ * are the provider's business and change without notice. The key is shown to
+ * OpenAI, and OpenAI says whether it is one of theirs. An Anthropic path,
+ * through the official SDK with thinking blocks replayed, existed for one
+ * commit (9fc7ef1, src/anthropic-chat.ts) and is the place to start when a
+ * second provider is wanted.
  */
 import { createCipheriv, createDecipheriv, hkdfSync, randomBytes } from "node:crypto";
 
-import Anthropic from "@anthropic-ai/sdk";
 import { eq } from "drizzle-orm";
 
 import { modelKey } from "./app-schema.js";
@@ -27,14 +31,6 @@ import type { Provider } from "./pricing.js";
 
 export type OwnKey = { provider: Provider; secret: string };
 export type OwnKeySummary = { provider: Provider; last4: string; addedAt: number };
-
-/** Which provider a key belongs to, from its shape. Anthropic first: its keys
- *  also begin "sk-". */
-export function providerOf(key: string): Provider | null {
-  if (/^sk-ant-[A-Za-z0-9_-]{16,}$/.test(key)) return "anthropic";
-  if (/^sk-[A-Za-z0-9_-]{16,}$/.test(key)) return "openai";
-  return null;
-}
 
 // --- encryption at rest ---------------------------------------------------------
 
@@ -71,29 +67,16 @@ export function unseal(sealed: string): string {
 
 // --- asking the provider whether the key is real -----------------------------------
 
-/** Where the Anthropic SDK should point. Tests stand a stub here. */
-export function anthropicBaseUrl(): string | undefined {
-  const override = process.env.ANTHROPIC_UPSTREAM_URL;
-  return override ? override.replace(/\/v1\/messages\/?$/, "") : undefined;
-}
-
-export const anthropicClient = (secret: string) => new Anthropic({ apiKey: secret, baseURL: anthropicBaseUrl(), maxRetries: 1 });
-
-/** "rejected" only when the provider itself says the key is no good. If the
- *  provider cannot be reached the key is kept: refusing a good key because of
- *  someone else's outage is worse than finding out on the first teach. */
-export async function checkKey(provider: Provider, secret: string): Promise<"ok" | "rejected" | "unverified"> {
+/** "rejected" only when OpenAI itself says the key is no good. If OpenAI cannot
+ *  be reached the key is kept: refusing a good key because of someone else's
+ *  outage is worse than finding out on the first teach. */
+export async function checkKey(secret: string): Promise<"ok" | "rejected" | "unverified"> {
   try {
-    if (provider === "anthropic") {
-      await anthropicClient(secret).models.list({ limit: 1 });
-      return "ok";
-    }
     const base = (process.env.OPENAI_UPSTREAM_URL ?? "https://api.openai.com/v1/chat/completions").replace(/\/chat\/completions\/?$/, "");
     const res = await fetch(`${base}/models`, { headers: { authorization: `Bearer ${secret}` }, signal: AbortSignal.timeout(8000) });
     if (res.status === 401 || res.status === 403) return "rejected";
     return res.ok ? "ok" : "unverified";
-  } catch (error) {
-    if (error instanceof Anthropic.AuthenticationError || error instanceof Anthropic.PermissionDeniedError) return "rejected";
+  } catch {
     return "unverified";
   }
 }
@@ -106,13 +89,17 @@ export type SaveOutcome =
 
 export async function saveOwnKey(db: Db, userId: string, raw: unknown): Promise<SaveOutcome> {
   const secret = typeof raw === "string" ? cleanSecret(raw) : null;
-  const provider = secret ? providerOf(secret) : null;
-  if (!secret || !provider) {
-    return { ok: false, status: 400, error: "That does not look like an OpenAI or Anthropic API key. They start with sk- or sk-ant-." };
+  if (!secret || secret.length < 20 || /\s/.test(secret)) {
+    return { ok: false, status: 400, error: "Paste the whole OpenAI API key, with nothing around it." };
   }
-  const verdict = await checkKey(provider, secret);
+  const provider: Provider = "openai";
+  const verdict = await checkKey(secret);
   if (verdict === "rejected") {
-    return { ok: false, status: 422, error: `${provider === "anthropic" ? "Anthropic" : "OpenAI"} rejected that key. Check it was copied whole and has not been revoked.` };
+    return {
+      ok: false,
+      status: 422,
+      error: "OpenAI rejected that key. Check it was copied whole and has not been revoked. Only OpenAI keys are supported for now.",
+    };
   }
   const now = new Date();
   const row = { provider, ciphertext: seal(secret), last4: secret.slice(-4), updatedAt: now };
