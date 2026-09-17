@@ -225,7 +225,9 @@ async function authorCard(db: Db, userId: string, theirs: PublishedSkill[]): Pro
   const about = await readProfile(db, userId);
   return {
     handle: about.handle,
-    name: [about.firstName, about.lastName].filter(Boolean).join(" ") || owner.name,
+    // Sign-up no longer asks for a name (the profile step does), so an account
+    // that skipped that step has none. It still gets a word, not a blank.
+    name: [about.firstName, about.lastName].filter(Boolean).join(" ") || owner.name || "Maker",
     bio: about.bio,
     avatar: about.avatar,
     joinedAt: owner.since.getTime(),
@@ -277,11 +279,17 @@ export async function countRun(
   visitor: string,
   day: string,
   viewerId: string | null,
+  dailyCap = Number.POSITIVE_INFINITY,
 ): Promise<{ counted: boolean; runs: number } | null> {
   const [row] = await db.select({ userId: skill.userId }).from(skill).where(and(eq(skill.id, id), eq(skill.published, true))).limit(1);
   if (!row) return null;
   let counted = false;
-  if (row.userId !== viewerId) {
+  // One address cannot vote for the whole registry in a day.
+  const [{ spent }] = await db
+    .select({ spent: sql<number>`count(*)::int` })
+    .from(skillRun)
+    .where(and(eq(skillRun.visitor, visitor), eq(skillRun.day, day)));
+  if (row.userId !== viewerId && Number(spent) < dailyCap) {
     const inserted = await db.insert(skillRun).values({ skillId: id, visitor, day }).onConflictDoNothing().returning();
     counted = inserted.length > 0;
   }

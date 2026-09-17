@@ -12,7 +12,7 @@
  * run it, and its author's handle. An author is the name they signed up with
  * and what they have done in public — never an email, never an account id.
  */
-import { createHash } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 
 import { Hono } from "hono";
 
@@ -29,6 +29,39 @@ export function visitorFor(headers: Headers, day: string, salt: string): string 
   const address = headers.get("x-forwarded-for")?.split(",")[0]?.trim() || headers.get("x-real-ip") || "local";
   const agent = headers.get("user-agent") ?? "";
   return createHash("sha256").update(`${salt}|${day}|${address}|${agent}`).digest("hex").slice(0, 32);
+}
+
+/**
+ * A run only counts if it comes with a token the skill's own page was given.
+ *
+ * Run counts rank the registry, so they are worth faking, and the endpoint has
+ * no login to lean on — strangers running skills is the point. This does not
+ * make a count unforgeable. It removes the cheap forgeries: a loop of bare
+ * POSTs (no token), a token for one skill spent on another (bound to the id),
+ * a token kept and replayed for weeks (it expires), and one address voting for
+ * the whole registry in an afternoon (a daily cap per visitor). What is left is
+ * someone scripting a real browser through real page loads, a few dozen times
+ * a day per address — at which point they are very nearly a user.
+ */
+export const RUN_TOKEN_MIN_AGE_MS = 3_000;
+export const RUN_TOKEN_MAX_AGE_MS = 6 * 60 * 60 * 1000;
+export const RUNS_PER_VISITOR_PER_DAY = 30;
+
+const sign = (skillId: string, issuedAt: number, salt: string) =>
+  createHmac("sha256", salt).update(`${skillId}|${issuedAt}`).digest("hex").slice(0, 32);
+
+export const runToken = (skillId: string, salt: string, now = Date.now()) => `${now}.${sign(skillId, now, salt)}`;
+
+export function runTokenValid(token: unknown, skillId: string, salt: string, now = Date.now()): boolean {
+  if (typeof token !== "string") return false;
+  const [stamp, mac] = token.split(".");
+  const issuedAt = Number(stamp);
+  if (!Number.isSafeInteger(issuedAt) || !mac) return false;
+  const age = now - issuedAt;
+  if (age < RUN_TOKEN_MIN_AGE_MS || age > RUN_TOKEN_MAX_AGE_MS) return false;
+  const expected = Buffer.from(sign(skillId, issuedAt, salt));
+  const given = Buffer.from(mac);
+  return given.length === expected.length && timingSafeEqual(given, expected);
 }
 
 export function registryRoutes(db: Db, auth?: AuthLike, salt = process.env.BETTER_AUTH_SECRET ?? "botcortex") {
@@ -54,7 +87,10 @@ export function registryRoutes(db: Db, auth?: AuthLike, salt = process.env.BETTE
     const row = await publishedSkill(db, c.req.param("id"));
     if (!row) return c.json({ error: "no such published skill" }, 404);
     c.header("Cache-Control", CACHE);
-    return c.json({ skill: row });
+    // The token rides with the skill, so only something that loaded this skill
+    // can report having run it. Cached for a minute like the rest, which is
+    // fine: it is proof of a recent page load, not a secret per visitor.
+    return c.json({ skill: row, runToken: runToken(row.id, salt) });
   });
 
   app.post("/registry/skills/:id/ran", async (c) => {
@@ -63,7 +99,11 @@ export function registryRoutes(db: Db, auth?: AuthLike, salt = process.env.BETTE
     const session = auth ? await auth.api.getSession({ headers: c.req.raw.headers }).catch(() => null) : null;
     const viewerId = session ? (session.user as { id: string }).id : null;
     const day = new Date().toISOString().slice(0, 10);
-    const outcome = await countRun(db, c.req.param("id"), visitorFor(c.req.raw.headers, day, salt), day, viewerId);
+    const body = (await c.req.json().catch(() => null)) as { token?: unknown } | null;
+    if (!runTokenValid(body?.token, c.req.param("id"), salt)) return c.json({ error: "a current run token is required" }, 403);
+    const outcome = await countRun(
+      db, c.req.param("id"), visitorFor(c.req.raw.headers, day, salt), day, viewerId, RUNS_PER_VISITOR_PER_DAY,
+    );
     if (!outcome) return c.json({ error: "no such published skill" }, 404);
     return c.json(outcome);
   });

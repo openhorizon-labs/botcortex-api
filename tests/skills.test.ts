@@ -11,7 +11,8 @@ import { eq } from "drizzle-orm";
 
 import { ORIGIN, makeApp, signUp } from "./harness.js";
 import { handleFor } from "../src/handles.js";
-import { MAX_SKILL_CHARS } from "../src/registry.js";
+import { MAX_SKILL_CHARS, countRun } from "../src/registry.js";
+import { runToken, runTokenValid } from "../src/routes/registry.js";
 import { skill } from "../src/app-schema.js";
 
 let app: Awaited<ReturnType<typeof makeApp>>["app"];
@@ -270,8 +271,27 @@ test("runs by other people rank the registry; reloads and the author's own runs 
   const before = await list();
   expect(before.length).toBeGreaterThan(1);
   const last = before[before.length - 1];
-  const ran = (headers: Record<string, string>) =>
-    app.request(`/api/registry/skills/${last.id}/ran`, { method: "POST", headers: { Origin: ORIGIN, ...headers } });
+  // What the app signs with (see registryRoutes' default).
+  const SALT = process.env.BETTER_AUTH_SECRET ?? "botcortex";
+  // A token from the skill's page, old enough to have been followed by a run.
+  const token = runToken(last.id, SALT, Date.now() - 10_000);
+  const ran = (headers: Record<string, string>, body: unknown = { token }) =>
+    app.request(`/api/registry/skills/${last.id}/ran`, {
+      method: "POST",
+      headers: { Origin: ORIGIN, "Content-Type": "application/json", ...headers },
+      body: JSON.stringify(body),
+    });
+
+  // No token, a token for another skill, one from the future, one gone stale: not runs.
+  const stranger = { "x-forwarded-for": "203.0.113.200", "user-agent": "z" };
+  expect((await ran(stranger, {})).status).toBe(403);
+  expect((await ran(stranger, { token: runToken(before[0].id, SALT, Date.now() - 10_000) })).status).toBe(403);
+  expect((await ran(stranger, { token: runToken(last.id, SALT) })).status).toBe(403);
+  expect((await ran(stranger, { token: runToken(last.id, SALT, Date.now() - 7 * 3600_000) })).status).toBe(403);
+  expect((await ran(stranger, { token: runToken(last.id, "someone-elses-secret", Date.now() - 10_000) })).status).toBe(403);
+  // The page hands out a real one.
+  const served = await (await app.request(`/api/registry/skills/${last.id}`, { headers: { Origin: ORIGIN } })).json();
+  expect(runTokenValid(served.runToken, last.id, SALT, Date.now() + 5_000)).toBe(true);
 
   // The author pressing Run on their own skill is not a vote.
   expect(await (await ran({ Cookie: cookie })).json()).toEqual({ counted: false, runs: 0 });
@@ -283,7 +303,8 @@ test("runs by other people rank the registry; reloads and the author's own runs 
   // The least recent skill is now first: it is the one people run.
   const after = await list();
   expect(after[0]).toMatchObject({ id: last.id, runs: 2 });
-  expect((await app.request("/api/registry/skills/nope/ran", { method: "POST", headers: { Origin: ORIGIN } })).status).toBe(404);
+  // An unknown skill has no valid token to present, so it is refused the same way.
+  expect((await app.request("/api/registry/skills/nope/ran", { method: "POST", headers: { Origin: ORIGIN } })).status).toBe(403);
 });
 
 test("the profile step: names, a bio, a reshuffled avatar, asked once", async () => {
@@ -340,4 +361,38 @@ test("the profile step: names, a bio, a reshuffled avatar, asked once", async ()
   expect(left).toMatchObject({ onboarded: true, firstName: "Test", lastName: "Owner" });
   // Whichever "test<n>" was free: the handle still exists, made from the name.
   expect(left.handle).toMatch(/^test\d*$/);
+});
+
+test("an account with no name yet still has a handle, a profile to fill in, and a word on its skills", async () => {
+  // Sign-up asks for an email and a password; the profile step asks the rest.
+  const nameless = await signUp(app, "nameless@example.com", "");
+  const mine = await (await app.request("/api/profile", { headers: { Cookie: nameless, Origin: ORIGIN } })).json();
+  expect(mine).toMatchObject({ firstName: "", lastName: "", onboarded: false });
+  expect(mine.handle).toMatch(/^maker\d+$/);
+
+  await app.request("/api/skills", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Cookie: nameless, Origin: ORIGIN },
+    body: JSON.stringify({ name: "nod", description: "Nods.", code: "def run(ctx): pass", platform: "so101", proven: true }),
+  });
+  const page = await (await app.request(`/api/registry/authors/${mine.handle}`, { headers: { Origin: ORIGIN } })).json();
+  expect(page.author.name).toBe("Maker");
+});
+
+test("one visitor cannot vote for the whole registry in a day", async () => {
+  const { db } = await makeApp();
+  const owner = crypto.randomUUID();
+  const { user } = await import("../src/auth-schema.js");
+  const { skill } = await import("../src/app-schema.js");
+  await db.insert(user).values({ id: owner, name: "Owner", email: `${owner}@example.com` });
+  const ids = Array.from({ length: 4 }, () => crypto.randomUUID());
+  for (const id of ids) {
+    await db.insert(skill).values({ id, userId: owner, name: `s_${id.slice(0, 6)}`, description: "d", code: "c", platform: "so101", proven: true, published: true });
+  }
+  const outcomes = [];
+  for (const id of ids) outcomes.push((await countRun(db, id, "visitor-a", "2026-09-17", null, 3))!.counted);
+  expect(outcomes).toEqual([true, true, true, false]);
+  // Someone else, and the same visitor tomorrow, still count.
+  expect((await countRun(db, ids[3], "visitor-b", "2026-09-17", null, 3))!.counted).toBe(true);
+  expect((await countRun(db, ids[3], "visitor-a", "2026-09-18", null, 3))!.counted).toBe(true);
 });

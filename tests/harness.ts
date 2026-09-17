@@ -54,11 +54,12 @@ export async function makeApp() {
 export async function signUp(
   app: Awaited<ReturnType<typeof makeApp>>["app"],
   email = "owner@example.com",
+  name = "Test Owner",
 ): Promise<string> {
   const res = await app.request("/api/auth/sign-up/email", {
     method: "POST",
     headers: { "Content-Type": "application/json", Origin: ORIGIN },
-    body: JSON.stringify({ name: "Test Owner", email, password: "correct-horse-battery" }),
+    body: JSON.stringify({ name, email, password: "correct-horse-battery" }),
   });
   if (res.status !== 200) throw new Error(`sign-up failed: ${res.status}`);
   return res.headers.get("set-cookie")!.split(";")[0];
