@@ -28,6 +28,7 @@ export type SkillUpsert =
 
 /** A row on the public registry: everything but who taught it. */
 export type PublishedSkill = {
+  id: string;
   name: string;
   description: string;
   code: string;
@@ -77,6 +78,7 @@ export async function upsertSkill(db: Db, userId: string, body: unknown): Promis
 
 /** What a boot reads back: everything needed to rebuild a local store. */
 export type SkillRow = {
+  id: string;
   name: string;
   description: string;
   code: string;
@@ -91,6 +93,7 @@ export type SkillRow = {
 export async function listSkills(db: Db, userId: string, platform?: string): Promise<SkillRow[]> {
   const rows = await db
     .select({
+      id: skill.id,
       name: skill.name,
       description: skill.description,
       code: skill.code,
@@ -131,6 +134,9 @@ export async function setPublished(
 export async function publishedSkills(db: Db, platform?: string): Promise<PublishedSkill[]> {
   const rows = await db
     .select({
+      // The row's own id, never the account's: it is what a share link and a
+      // per-skill page address, and two owners may both have a "wave".
+      id: skill.id,
       name: skill.name,
       description: skill.description,
       code: skill.code,
@@ -141,6 +147,24 @@ export async function publishedSkills(db: Db, platform?: string): Promise<Publis
     .where(platform ? and(eq(skill.published, true), eq(skill.platform, platform)) : eq(skill.published, true))
     .orderBy(asc(skill.platform), desc(skill.updatedAt), asc(skill.name));
   return rows.map((row) => ({ ...row, updatedAt: row.updatedAt.getTime() }));
+}
+
+/** One published skill by id, or null — unpublished and unknown look the
+ *  same from outside, on purpose. */
+export async function publishedSkill(db: Db, id: string): Promise<PublishedSkill | null> {
+  const [row] = await db
+    .select({
+      id: skill.id,
+      name: skill.name,
+      description: skill.description,
+      code: skill.code,
+      platform: skill.platform,
+      updatedAt: skill.updatedAt,
+    })
+    .from(skill)
+    .where(and(eq(skill.id, id), eq(skill.published, true)))
+    .limit(1);
+  return row ? { ...row, updatedAt: row.updatedAt.getTime() } : null;
 }
 
 /** The store's mark_ran, for the registry copy. False when no such row.

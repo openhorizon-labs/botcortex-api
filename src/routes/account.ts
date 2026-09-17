@@ -11,7 +11,9 @@ import { Hono } from "hono";
 import type { Db } from "../db.js";
 import type { AuthLike } from "../hono.js";
 import {
-  SIGNUP_GRANT_MICROS,
+  ensureWelcomeGrant,
+  markWelcomeSeen,
+  unseenWelcome,
   balanceFor,
   formatMicros,
   formatMicrosPrecise,
@@ -68,10 +70,7 @@ export function accountRoutes(auth: AuthLike, db: Db) {
     const id = crypto.randomUUID();
     await db.insert(robotKey).values({ id, userId, name, prefix, hash });
 
-    const balance = await balanceFor(db, userId);
-    if (balance.grantedMicros === 0) {
-      await grant(db, userId, SIGNUP_GRANT_MICROS, "signup");
-    }
+    await ensureWelcomeGrant(db, userId);
 
     return c.json({ id, name, prefix, key: raw }, 201);
   });
@@ -134,6 +133,11 @@ export function accountRoutes(auth: AuthLike, db: Db) {
       return c.json({ error: `${name} has never run successfully on ${platform}; run it before publishing` }, 409);
     }
     return c.json({ ok: true, name, published: outcome === "published" });
+  });
+
+  app.post("/credits/welcome/seen", async (c) => {
+    await markWelcomeSeen(db, c.get("userId"));
+    return c.json({ ok: true });
   });
 
   app.post("/skills/:name/ran", async (c) => {
@@ -399,9 +403,18 @@ export function accountRoutes(auth: AuthLike, db: Db) {
   });
 
   app.get("/credits", async (c) => {
-    const balance = await balanceFor(db, c.get("userId"));
+    const userId = c.get("userId");
+    // Here, and not only at sign-up: this is the first thing the app asks
+    // after ANY first login, so it covers accounts made before the grant
+    // existed and accounts made by script, with no auth hook to keep alive.
+    await ensureWelcomeGrant(db, userId);
+    const balance = await balanceFor(db, userId);
+    const welcome = await unseenWelcome(db, userId);
     return c.json({
       ...balance,
+      // Present exactly until the owner dismisses the dialog that announces
+      // it (POST /credits/welcome/seen). Once per account, on any device.
+      welcome: welcome ? { amountMicros: welcome.amountMicros, display: formatMicros(welcome.amountMicros) } : null,
       display: formatMicros(balance.balanceMicros),
       // Precise: two decimals would report a real afternoon of
       // teaching as "$0.00".

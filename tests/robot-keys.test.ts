@@ -354,3 +354,25 @@ test("using a key records that it is live", async () => {
   const [after] = await db.select().from(robotKey).where(eq(robotKey.id, id));
   expect(after.lastUsedAt).not.toBeNull();
 });
+
+test("a browser-only account gets its welcome credit on first look, is told once, and only once", async () => {
+  // The grant used to fire only on minting a ROBOT key, which someone teaching
+  // a simulated arm in a tab never does: they signed up to $0 and a first
+  // sentence that failed with "out of credit".
+  const fresh = await signUp(app, "browser-only@example.com");
+  const first = await (await app.request("/api/credits", { headers: { Cookie: fresh, Origin: ORIGIN } })).json();
+  expect(first.balanceMicros).toBe(SIGNUP_GRANT_MICROS);
+  expect(first.welcome).toEqual({ amountMicros: SIGNUP_GRANT_MICROS, display: "$2.00" });
+
+  // Asking again neither grants again nor stops announcing: the dialog has
+  // not been dismissed yet, and a reload must not swallow it.
+  const again = await (await app.request("/api/credits", { headers: { Cookie: fresh, Origin: ORIGIN } })).json();
+  expect(again.balanceMicros).toBe(SIGNUP_GRANT_MICROS);
+  expect(again.welcome).not.toBeNull();
+
+  const seen = await app.request("/api/credits/welcome/seen", { method: "POST", headers: { Cookie: fresh, Origin: ORIGIN } });
+  expect(seen.status).toBe(200);
+  const after = await (await app.request("/api/credits", { headers: { Cookie: fresh, Origin: ORIGIN } })).json();
+  expect(after.welcome).toBeNull();
+  expect(after.balanceMicros).toBe(SIGNUP_GRANT_MICROS);
+});

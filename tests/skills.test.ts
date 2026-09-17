@@ -173,7 +173,14 @@ test("a successful run publishes by default; only a proven skill can be listed; 
     { name: "roarm_m2", skills: [expect.objectContaining({ name: "wave", platform: "roarm_m2", code: "def run(ctx): return 'roarm2'" })] },
   ]);
   // No account id leaks onto the public page.
-  expect(Object.keys(body.platforms[0].skills[0]).sort()).toEqual(["code", "description", "name", "platform", "updatedAt"]);
+  // The row's own id is public — it is what a share link addresses — and the
+  // account's never is.
+  expect(Object.keys(body.platforms[0].skills[0]).sort()).toEqual(["code", "description", "id", "name", "platform", "updatedAt"]);
+  const id = body.platforms[0].skills[0].id as string;
+  const one = await app.request(`/api/registry/skills/${id}`, { headers: { Origin: ORIGIN } });
+  expect(one.status).toBe(200);
+  expect((await one.json()).skill).toMatchObject({ id, name: "wave", platform: "roarm_m2" });
+  expect((await app.request("/api/registry/skills/not-a-skill", { headers: { Origin: ORIGIN } })).status).toBe(404);
   expect((await (await app.request("/api/registry?platform=openarm_v1", { headers: { Origin: ORIGIN } })).json()).count).toBe(0);
 });
 

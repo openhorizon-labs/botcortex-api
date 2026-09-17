@@ -11,7 +11,7 @@
  * cannot predict, and killing a teach mid-authoring to save a fraction of a
  * cent is a worse outcome than a small overshoot.
  */
-import { eq, sql } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 
 import type { Db } from "./db.js";
 import { creditGrant, usage } from "./app-schema.js";
@@ -122,4 +122,49 @@ export function formatMicrosPrecise(micros: number): string {
   const dollars = micros / 1_000_000;
   const roundCents = Number.isInteger(Math.round(dollars * 1_000_000) / 10_000);
   return `$${dollars.toFixed(roundCents ? 2 : 4)}`;
+}
+
+
+/** The reason every welcome grant carries. Older accounts got theirs when they
+ *  minted a first robot key, under the same word. */
+export const WELCOME_REASON = "signup";
+
+/**
+ * Give an account its welcome credit if it has never been granted anything.
+ *
+ * It used to fire only when an owner minted their first ROBOT key — which
+ * someone teaching a simulated arm in a browser tab never does, so the people
+ * most likely to be trying BotCortex for the first time signed up to a balance
+ * of zero and a first sentence that failed with "out of credit".
+ *
+ * Idempotent under a race: the row's id is derived from the account, so two
+ * requests that both see "nothing granted" write the same primary key and one
+ * of them does nothing. Returns whether THIS call made the grant.
+ */
+export async function ensureWelcomeGrant(db: Db, userId: string): Promise<boolean> {
+  const balance = await balanceFor(db, userId);
+  if (balance.grantedMicros !== 0) return false;
+  const made = await db
+    .insert(creditGrant)
+    .values({ id: `welcome:${userId}`, userId, amountMicros: SIGNUP_GRANT_MICROS, reason: WELCOME_REASON })
+    .onConflictDoNothing()
+    .returning();
+  return made.length > 0;
+}
+
+/** The welcome grant the owner has not been told about yet, if any. */
+export async function unseenWelcome(db: Db, userId: string): Promise<{ amountMicros: number } | null> {
+  const [row] = await db
+    .select({ amountMicros: creditGrant.amountMicros })
+    .from(creditGrant)
+    .where(and(eq(creditGrant.userId, userId), eq(creditGrant.reason, WELCOME_REASON), isNull(creditGrant.seenAt)))
+    .limit(1);
+  return row ?? null;
+}
+
+export async function markWelcomeSeen(db: Db, userId: string): Promise<void> {
+  await db
+    .update(creditGrant)
+    .set({ seenAt: new Date() })
+    .where(and(eq(creditGrant.userId, userId), eq(creditGrant.reason, WELCOME_REASON), isNull(creditGrant.seenAt)));
 }

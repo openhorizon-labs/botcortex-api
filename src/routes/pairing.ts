@@ -17,7 +17,7 @@ import { Hono } from "hono";
 
 import type { Db } from "../db.js";
 import type { AuthLike } from "../hono.js";
-import { SIGNUP_GRANT_MICROS, balanceFor, grant } from "../credits.js";
+import { ensureWelcomeGrant } from "../credits.js";
 import { mintKey, sha256 } from "../keys.js";
 import { deviceCode } from "../auth-schema.js";
 import { robot, robotKey } from "../app-schema.js";
@@ -111,10 +111,7 @@ export function pairingRoutes(auth: AuthLike, db: Db) {
     const id = crypto.randomUUID();
     await db.insert(robotKey).values({ id, userId, name, prefix, hash });
 
-    const balance = await balanceFor(db, userId);
-    if (balance.grantedMicros === 0) {
-      await grant(db, userId, SIGNUP_GRANT_MICROS, "signup");
-    }
+    await ensureWelcomeGrant(db, userId);
 
     return c.json({ id, name, prefix, key: raw }, 201);
   });

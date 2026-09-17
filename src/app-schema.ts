@@ -66,6 +66,11 @@ export const creditGrant = pgTable(
       .references(() => user.id, { onDelete: "cascade" }),
     amountMicros: bigint("amount_micros", { mode: "number" }).notNull(),
     reason: text("reason").notNull(),
+    /** When the owner was TOLD about this grant. Null is "not yet": the
+     *  welcome credit is announced once, in a dialog, and "once" has to mean
+     *  once per account and not once per browser — so it is a fact about the
+     *  grant, kept here, and not a flag in localStorage. */
+    seenAt: timestamp("seen_at"),
     createdAt: timestamp("created_at").notNull().defaultNow(),
   },
   (t) => [index("credit_grant_user_idx").on(t.userId)],
