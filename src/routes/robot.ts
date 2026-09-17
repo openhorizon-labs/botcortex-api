@@ -34,7 +34,7 @@ import {
 import { meteredProxy } from "../inference.js";
 import { keyFromRequest, resolveKey, sha256, type ResolvedKey } from "../keys.js";
 import { ALLOWED_MODELS, type Provider } from "../pricing.js";
-import { recordEvent } from "../episodes.js";
+import { recordBlob, recordEvent } from "../episodes.js";
 import { upsertSkill } from "../registry.js";
 import { rankByMeaning, readQuestion } from "../similarity.js";
 import { robot, skill } from "../app-schema.js";
@@ -103,6 +103,17 @@ export function robotRoutes(db: Db) {
     const result = await recordEvent(db, c.get("key").userId, "robot", await c.req.json().catch(() => null));
     if (!result.ok) return c.json({ error: result.error }, result.status);
     return c.json({ ok: true, id: result.id });
+  });
+
+  /** Footage belonging to an episode, in parts of raw bytes (see episodes.ts).
+   *  Only robots send these: a browser tab has no camera. */
+  app.put("/episodes/:id/blobs/:name", async (c) => {
+    const part = Number(c.req.query("part") ?? "0");
+    const parts = Number(c.req.query("parts") ?? "1");
+    const body = new Uint8Array(await c.req.arrayBuffer());
+    const result = await recordBlob(db, c.get("key").userId, c.req.param("id"), c.req.param("name"), part, parts, body);
+    if (!result.ok) return c.json({ error: result.error }, result.status);
+    return c.json(result);
   });
 
   /** Forget a skill — the registry copy only; the robot deletes its own file.

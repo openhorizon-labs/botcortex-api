@@ -21,7 +21,7 @@
  */
 import { and, count, eq, gte, inArray, sql } from "drizzle-orm";
 
-import { episode } from "./app-schema.js";
+import { episode, episodeBlob } from "./app-schema.js";
 import type { Db } from "./db.js";
 
 export const MAX_TICKS = 6_000; // five minutes at 20 Hz; a skill is seconds
@@ -200,4 +200,79 @@ export async function summarise(db: Db, userId: string) {
     platforms: [...new Set(rows.map((r) => r.platform))].sort(),
     skills: [...new Set(rows.map((r) => r.skill ?? "?"))].sort(),
   };
+}
+
+
+// --- footage: what a real arm saw -------------------------------------------
+
+export const MAX_PART_BYTES = 3_500_000; // under the platform's 4.5 MB request limit
+export const MAX_PARTS = 200;
+export const MAX_BLOB_BYTES_PER_DAY = 2_000_000_000;
+const BLOB_NAME = /^[\w-]{1,40}\.(mp4|npz|zip|jpg|png)$/;
+const BUCKET = "episodes";
+
+type BlobResult = { ok: true; stored: "supabase" | "database"; complete: boolean } | { ok: false; status: 400 | 404 | 413 | 429 | 502; error: string };
+
+function bucket(): { url: string; key: string } | null {
+  const url = process.env.SUPABASE_URL?.replace(/\/$/, "");
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  return url && key ? { url, key } : null;
+}
+
+/**
+ * One part of one file belonging to an episode this account already recorded.
+ * Idempotent per part: a retry after a timeout overwrites the same row or the
+ * same object. With a bucket, parts are separate objects (`<name>.<part>`) and
+ * are never joined here — a serverless function has neither the memory nor the
+ * time to stitch a video, and whoever reads the footage can concatenate.
+ */
+export async function recordBlob(
+  db: Db,
+  userId: string,
+  episodeId: string,
+  name: string,
+  part: number,
+  parts: number,
+  body: Uint8Array,
+  put: typeof fetch = fetch,
+): Promise<BlobResult> {
+  if (!id(episodeId) || !BLOB_NAME.test(name)) return { ok: false, status: 400, error: "not a file this API keeps" };
+  if (!Number.isInteger(part) || !Number.isInteger(parts) || parts < 1 || parts > MAX_PARTS || part < 0 || part >= parts) {
+    return { ok: false, status: 400, error: "part must be within parts" };
+  }
+  if (body.byteLength === 0) return { ok: false, status: 400, error: "an empty part" };
+  if (body.byteLength > MAX_PART_BYTES) return { ok: false, status: 413, error: `a part is at most ${MAX_PART_BYTES} bytes` };
+
+  const [owner] = await db.select({ id: episode.id }).from(episode).where(and(eq(episode.userId, userId), eq(episode.id, episodeId)));
+  if (!owner) return { ok: false, status: 404, error: "no such episode in this account — send the episode first" };
+
+  const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  const [{ today }] = await db
+    .select({ today: sql<number>`coalesce(sum(${episodeBlob.size}), 0)::bigint` })
+    .from(episodeBlob)
+    .where(and(eq(episodeBlob.userId, userId), gte(episodeBlob.createdAt, since)));
+  if (Number(today) + body.byteLength > MAX_BLOB_BYTES_PER_DAY) {
+    return { ok: false, status: 429, error: "this account has sent its footage for today" };
+  }
+
+  const where = bucket();
+  if (where) {
+    const path = `${userId}/${episodeId}/${name}.${String(part).padStart(3, "0")}`;
+    const res = await put(`${where.url}/storage/v1/object/${BUCKET}/${path}`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${where.key}`, "Content-Type": "application/octet-stream", "x-upsert": "true" },
+      body: body as unknown as BodyInit,
+    });
+    if (!res.ok) return { ok: false, status: 502, error: `storage refused the part (${res.status})` };
+  }
+  const row = { userId, episodeId, name, part, parts, size: body.byteLength, storage: where ? "supabase" : "database", bytes: where ? null : body };
+  await db
+    .insert(episodeBlob)
+    .values(row)
+    .onConflictDoUpdate({ target: [episodeBlob.userId, episodeBlob.episodeId, episodeBlob.name, episodeBlob.part], set: row });
+  const [{ have }] = await db
+    .select({ have: count() })
+    .from(episodeBlob)
+    .where(and(eq(episodeBlob.userId, userId), eq(episodeBlob.episodeId, episodeId), eq(episodeBlob.name, name)));
+  return { ok: true, stored: where ? "supabase" : "database", complete: have >= parts };
 }

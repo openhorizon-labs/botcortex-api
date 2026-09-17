@@ -142,3 +142,52 @@ test("a robot says the same things with its key, and they are marked as a robot'
   expect(row).toMatchObject({ source: "robot", backend: "RealRobot" });
   expect((await post(run("e1789600000021-x", true), "Bearer bx_live_deadbeef")).status).toBe(401);
 });
+
+// --- footage -----------------------------------------------------------------
+
+import { episodeBlob } from "../src/app-schema.js";
+import { MAX_PART_BYTES, recordBlob } from "../src/episodes.js";
+
+test("a real arm's footage arrives in parts, survives a retry, and needs its episode first", async () => {
+  const minted = await app.request("/api/keys", { method: "POST", headers: { "Content-Type": "application/json", Cookie: cookie, Origin: ORIGIN }, body: JSON.stringify({ name: "camera arm" }) });
+  const { key } = await minted.json();
+  const put = (id: string, name: string, part: number, parts: number, body: Uint8Array) =>
+    app.request(`/v1/episodes/${id}/blobs/${name}?part=${part}&parts=${parts}`, { method: "PUT", headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/octet-stream" }, body: body as unknown as BodyInit });
+
+  const first = new Uint8Array([1, 2, 3, 4]);
+  const second = new Uint8Array([5, 6]);
+  expect((await put("e1789600000030-film", "front.mp4", 0, 2, first)).status).toBe(404); // no such episode yet
+
+  await app.request("/v1/episodes", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` }, body: JSON.stringify(run("e1789600000030-film", true, { backend: "RealRobot" })) });
+  expect(await (await put("e1789600000030-film", "front.mp4", 0, 2, first)).json()).toMatchObject({ ok: true, stored: "database", complete: false });
+  expect(await (await put("e1789600000030-film", "front.mp4", 0, 2, first)).json()).toMatchObject({ complete: false }); // the retry is the same part
+  expect(await (await put("e1789600000030-film", "front.mp4", 1, 2, second)).json()).toMatchObject({ complete: true });
+
+  const rows = await db.select().from(episodeBlob).where(eq(episodeBlob.episodeId, "e1789600000030-film"));
+  expect(rows.map((r) => [r.part, r.size, [...(r.bytes ?? [])]]).sort()).toEqual([[0, 4, [1, 2, 3, 4]], [1, 2, [5, 6]]]);
+
+  expect((await put("e1789600000030-film", "../../etc/passwd", 0, 1, first)).status).toBe(404); // not even a route
+  expect((await put("e1789600000030-film", "notes.exe", 0, 1, first)).status).toBe(400);
+  expect((await put("e1789600000030-film", "front.mp4", 2, 2, first)).status).toBe(400);
+  expect((await put("e1789600000030-film", "front.mp4", 0, 1, new Uint8Array(MAX_PART_BYTES + 1))).status).toBe(413);
+});
+
+test("with a bucket configured the bytes go there and only the receipt stays in the database", async () => {
+  process.env.SUPABASE_URL = "https://example.supabase.co";
+  process.env.SUPABASE_SERVICE_ROLE_KEY = "service-key";
+  const sent: { url: string; auth: string | null; size: number }[] = [];
+  const fakePut = (async (url: string, init: RequestInit) => {
+    sent.push({ url, auth: new Headers(init.headers).get("Authorization"), size: (init.body as Uint8Array).byteLength });
+    return new Response("{}", { status: 200 });
+  }) as unknown as typeof fetch;
+  try {
+    const result = await recordBlob(db, userId, "e1789600000030-film", "side.mp4", 0, 1, new Uint8Array([9, 9, 9]), fakePut);
+    expect(result).toEqual({ ok: true, stored: "supabase", complete: true });
+    expect(sent).toEqual([{ url: `https://example.supabase.co/storage/v1/object/episodes/${userId}/e1789600000030-film/side.mp4.000`, auth: "Bearer service-key", size: 3 }]);
+    const [row] = await db.select().from(episodeBlob).where(eq(episodeBlob.name, "side.mp4"));
+    expect([row.storage, row.bytes, row.size]).toEqual(["supabase", null, 3]);
+  } finally {
+    delete process.env.SUPABASE_URL;
+    delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+  }
+});

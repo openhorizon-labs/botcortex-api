@@ -13,6 +13,7 @@ import {
   bigint,
   bigserial,
   boolean,
+  customType,
   index,
   integer,
   jsonb,
@@ -427,4 +428,43 @@ export const episode = pgTable(
     index("episode_outcome_idx").on(t.ok, t.kind),
     index("episode_created_idx").on(t.createdAt),
   ],
+);
+
+const bytea = customType<{ data: Uint8Array; driverData: Uint8Array }>({
+  dataType: () => "bytea",
+  toDriver: (value) => value,
+  fromDriver: (value) => value,
+});
+
+/**
+ * What an episode carries that is not numbers: camera footage from a real arm,
+ * which cannot be re-rendered the way a simulator's can.
+ *
+ * A file arrives in parts, because the API runs behind a 4.5 MB request limit
+ * and a minute of video is more than that. Each part is a row until the last
+ * one lands; where the bytes finally live is `storage`:
+ *
+ *   "supabase"  an object in the episodes bucket (SUPABASE_URL +
+ *               SUPABASE_SERVICE_ROLE_KEY set) — `bytes` stays null
+ *   "database"  right here. Correct, and not where footage belongs at scale:
+ *               Postgres on the free tier is 500 MB and a filmed episode is
+ *               about one. It is the fallback that keeps nothing from being
+ *               lost before a bucket exists.
+ */
+export const episodeBlob = pgTable(
+  "episode_blob",
+  {
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    episodeId: text("episode_id").notNull(),
+    name: text("name").notNull(),
+    part: integer("part").notNull(),
+    parts: integer("parts").notNull(),
+    size: integer("size").notNull(),
+    storage: text("storage").notNull(),
+    bytes: bytea("bytes"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.userId, t.episodeId, t.name, t.part] })],
 );
