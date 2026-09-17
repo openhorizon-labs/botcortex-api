@@ -23,6 +23,7 @@ import {
 import { HANDLE_MESSAGES, handleAvailability, readProfile, updateProfile, type ProfileChange } from "../handles.js";
 import { describeOwnKey, removeOwnKey, saveOwnKey } from "../byok.js";
 import { meteredProxy } from "../inference.js";
+import { rankByMeaning, readQuestion } from "../similarity.js";
 import { shortTitle } from "../titles.js";
 import { mintKey } from "../keys.js";
 import { ALLOWED_MODELS, DEFAULT_MODEL, catalogue } from "../pricing.js";
@@ -478,6 +479,16 @@ export function accountRoutes(auth: AuthLike, db: Db) {
   app.delete("/model-key", async (c) => {
     await removeOwnKey(db, c.get("userId"));
     return c.json({ key: null });
+  });
+
+  /** Which working skills are most like this task — asked by the browser's
+   *  agent loop just before the runtime recalls. `ranked: null` means "could
+   *  not say" (no credit, no key, provider down): the runtime uses words. */
+  app.post("/similar", async (c) => {
+    const question = readQuestion(await c.req.json().catch(() => null));
+    if (!question) return c.json({ error: "query and candidates are required" }, 400);
+    const ranked = await rankByMeaning(db, { userId: c.get("userId"), keyId: null }, question.query, question.candidates);
+    return c.json({ ranked });
   });
 
   app.get("/credits", async (c) => {

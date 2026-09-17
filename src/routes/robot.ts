@@ -34,6 +34,7 @@ import { meteredProxy } from "../inference.js";
 import { keyFromRequest, resolveKey, sha256, type ResolvedKey } from "../keys.js";
 import { ALLOWED_MODELS, type Provider } from "../pricing.js";
 import { upsertSkill } from "../registry.js";
+import { rankByMeaning, readQuestion } from "../similarity.js";
 import { robot, skill } from "../app-schema.js";
 import { user } from "../auth-schema.js";
 
@@ -73,6 +74,15 @@ export function robotRoutes(db: Db) {
 
   app.post("/chat/completions", (c) => proxy(c, "openai"));
   app.post("/messages", (c) => proxy(c, "anthropic"));
+
+  /** The same question the browser asks at /api/similar, for a robot running
+   *  its own agent: which of its working skills is most like this task. */
+  app.post("/similar", async (c) => {
+    const question = readQuestion(await c.req.json().catch(() => null));
+    if (!question) return c.json({ error: "query and candidates are required" }, 400);
+    const key = c.get("key");
+    return c.json({ ranked: await rankByMeaning(db, { userId: key.userId, keyId: key.id }, question.query, question.candidates) });
+  });
 
   /** Skill sync. The robot keeps the original and runs from disk; this copy
    *  feeds the registry. Best-effort by contract — the runtime never lets a
