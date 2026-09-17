@@ -20,6 +20,7 @@ import {
   formatMicrosUsed,
   grant,
 } from "../credits.js";
+import { ensureHandle, setHandle } from "../handles.js";
 import { meteredProxy } from "../inference.js";
 import { mintKey } from "../keys.js";
 import { ALLOWED_MODELS, DEFAULT_MODEL, catalogue } from "../pricing.js";
@@ -400,6 +401,21 @@ export function accountRoutes(auth: AuthLike, db: Db) {
       default: DEFAULT_MODEL,
       balanceMicros: balance.balanceMicros,
     });
+  });
+
+  /** The handle skills are published under. Made on first ask. */
+  app.get("/profile", async (c) => c.json({ handle: await ensureHandle(db, c.get("userId")) }));
+
+  app.put("/profile", async (c) => {
+    const body = (await c.req.json().catch(() => null)) as { handle?: unknown } | null;
+    if (typeof body?.handle !== "string") return c.json({ error: "handle is required" }, 400);
+    const problem = await setHandle(db, c.get("userId"), body.handle);
+    if (problem === "taken") return c.json({ error: "That handle is taken.", code: problem }, 409);
+    if (problem === "reserved") return c.json({ error: "That handle is reserved.", code: problem }, 400);
+    if (problem === "invalid") {
+      return c.json({ error: "3 to 24 characters: lowercase letters, numbers and underscores.", code: problem }, 400);
+    }
+    return c.json({ handle: await ensureHandle(db, c.get("userId")) });
   });
 
   app.get("/credits", async (c) => {

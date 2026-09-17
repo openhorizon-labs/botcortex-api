@@ -17,6 +17,7 @@ import {
   integer,
   jsonb,
   pgTable,
+  primaryKey,
   text,
   timestamp,
   uniqueIndex,
@@ -299,3 +300,40 @@ export const usageRelations = relations(usage, ({ one }) => ({
 export const skillRelations = relations(skill, ({ one }) => ({
   user: one(user, { fields: [skill.userId], references: [user.id] }),
 }));
+
+/**
+ * The public face of an account: a handle, unique, that a skill page and an
+ * author page can address (Sai, Sep 17). Its own table rather than a column on
+ * `user`, because auth-schema.ts is regenerated and anything added there is
+ * lost. A row appears the first time one is needed — most accounts never
+ * publish anything and never get one.
+ */
+export const profile = pgTable("profile", {
+  userId: text("user_id")
+    .primaryKey()
+    .references(() => user.id, { onDelete: "cascade" }),
+  handle: text("handle").notNull().unique(),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+/**
+ * Someone other than the author ran a published skill in their browser.
+ *
+ * What the registry is ranked by: a skill strangers keep running is a better
+ * skill than a newer one nobody has. One row per skill, visitor and day, so
+ * reloading a page is not a vote. `visitor` is a salted hash that changes
+ * daily — never an address, and not linkable from one day to the next.
+ */
+export const skillRun = pgTable(
+  "skill_run",
+  {
+    skillId: text("skill_id")
+      .notNull()
+      .references(() => skill.id, { onDelete: "cascade" }),
+    visitor: text("visitor").notNull(),
+    day: text("day").notNull(),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.skillId, t.visitor, t.day] })],
+);

@@ -11,10 +11,11 @@
  * account's rows back at boot (GET /api/skills) and rebuilds its local
  * store from them when the browser's own copy is gone.
  */
-import { and, asc, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 
-import { skill } from "./app-schema.js";
+import { profile, skill, skillRun } from "./app-schema.js";
 import { user } from "./auth-schema.js";
+import { ensureHandle } from "./handles.js";
 import type { Db } from "./db.js";
 
 /** Roughly a long authored skill plus its metadata. */
@@ -29,33 +30,26 @@ export type SkillUpsert =
 
 /**
  * Who taught a skill, as the public sees them (Sai, Sep 17: a skill page names
- * its author, with a card on hover).
+ * its author, with a card on hover and a page behind it).
  *
  * Made ONLY of things the person typed as their name or did in public: never
- * the email, never the account id. The handle is a way to say the name, not an
- * address: two people called Sam are both "@sam", and nothing is looked up by it.
+ * the email, never the account id. The handle is unique — see handles.ts.
  */
 export type SkillAuthor = {
   handle: string;
   name: string;
   /** Milliseconds since the epoch. */
   joinedAt: number;
-  /** How many skills they have on the public registry, this one included. */
+  /** How many skills they have on the public registry. */
   skills: number;
   /** The arms those skills were proven on. */
   platforms: string[];
+  /** Times someone else has run one of their skills. */
+  runs: number;
 };
 
-/** "Saidev Dhal (Dev)" -> "saidev". The first word of the name, reduced to
- *  what a handle can hold; a name with nothing usable in it is "someone". */
-export function handleFor(name: string): string {
-  const first = name.trim().split(/\s+/)[0] ?? "";
-  const handle = first.normalize("NFKD").toLowerCase().replace(/[^\p{L}\p{N}_]/gu, "").slice(0, 24);
-  return handle || "someone";
-}
-
-/** A row on the public registry. The list carries no author; one skill's own
- *  page does. */
+/** A row on the public registry. In a list the author is a handle; on the
+ *  skill's own page it is the whole card. */
 export type PublishedSkill = {
   id: string;
   name: string;
@@ -63,7 +57,10 @@ export type PublishedSkill = {
   code: string;
   platform: string;
   updatedAt: number;
-  author?: SkillAuthor;
+  /** Times someone other than the author has run it — what the list is
+   *  ranked by. */
+  runs: number;
+  author: { handle: string } | SkillAuthor;
 };
 
 export async function upsertSkill(db: Db, userId: string, body: unknown): Promise<SkillUpsert> {
@@ -159,63 +156,129 @@ export async function setPublished(
   return published ? "published" : "unpublished";
 }
 
-/** The public registry: every published skill, newest first within an
- *  arm. No account ids, no session — this is the page anyone can read. */
+const PUBLIC_COLUMNS = {
+  // The row's own id, never the account's: it is what a share link and a
+  // per-skill page address, and two owners may both have a "wave".
+  id: skill.id,
+  name: skill.name,
+  description: skill.description,
+  code: skill.code,
+  platform: skill.platform,
+  updatedAt: skill.updatedAt,
+  userId: skill.userId,
+};
+
+type Row = { id: string; name: string; description: string; code: string; platform: string; updatedAt: Date; userId: string };
+
+async function runCounts(db: Db, skillIds: string[]): Promise<Map<string, number>> {
+  if (skillIds.length === 0) return new Map();
+  const rows = await db
+    .select({ skillId: skillRun.skillId, runs: sql<number>`count(*)::int` })
+    .from(skillRun)
+    .where(inArray(skillRun.skillId, skillIds))
+    .groupBy(skillRun.skillId);
+  return new Map(rows.map((row) => [row.skillId, Number(row.runs)]));
+}
+
+/** Rows as the public sees them. The account id is read to find the handle
+ *  and goes no further than this function. */
+async function published(db: Db, rows: Row[]): Promise<PublishedSkill[]> {
+  const runs = await runCounts(db, rows.map((row) => row.id));
+  const handles = new Map<string, string>();
+  for (const userId of new Set(rows.map((row) => row.userId))) handles.set(userId, await ensureHandle(db, userId));
+  return rows.map(({ userId, updatedAt, ...row }) => ({
+    ...row,
+    updatedAt: updatedAt.getTime(),
+    runs: runs.get(row.id) ?? 0,
+    author: { handle: handles.get(userId)! },
+  }));
+}
+
+/** Ranked the way the registry is worth reading: what other people keep
+ *  running first, then the newest. Recency alone put every half-idea a
+ *  beginner had just proven above the skill fifty strangers had run. */
+function ranked(skills: PublishedSkill[]): PublishedSkill[] {
+  return [...skills].sort(
+    (a, b) =>
+      a.platform.localeCompare(b.platform) || b.runs - a.runs || b.updatedAt - a.updatedAt || a.name.localeCompare(b.name),
+  );
+}
+
+/** The public registry: every published skill, best first within an arm. No
+ *  account ids, no session — this is the page anyone can read. */
 export async function publishedSkills(db: Db, platform?: string): Promise<PublishedSkill[]> {
   const rows = await db
-    .select({
-      // The row's own id, never the account's: it is what a share link and a
-      // per-skill page address, and two owners may both have a "wave".
-      id: skill.id,
-      name: skill.name,
-      description: skill.description,
-      code: skill.code,
-      platform: skill.platform,
-      updatedAt: skill.updatedAt,
-    })
+    .select(PUBLIC_COLUMNS)
     .from(skill)
     .where(platform ? and(eq(skill.published, true), eq(skill.platform, platform)) : eq(skill.published, true))
     .orderBy(asc(skill.platform), desc(skill.updatedAt), asc(skill.name));
-  return rows.map((row) => ({ ...row, updatedAt: row.updatedAt.getTime() }));
+  return ranked(await published(db, rows));
 }
 
-/** One published skill by id, or null — unpublished and unknown look the
- *  same from outside, on purpose. */
-export async function publishedSkill(db: Db, id: string): Promise<PublishedSkill | null> {
-  const [row] = await db
-    .select({
-      id: skill.id,
-      name: skill.name,
-      description: skill.description,
-      code: skill.code,
-      platform: skill.platform,
-      updatedAt: skill.updatedAt,
-      userId: skill.userId,
-      authorName: user.name,
-      authorSince: user.createdAt,
-    })
-    .from(skill)
-    .innerJoin(user, eq(user.id, skill.userId))
-    .where(and(eq(skill.id, id), eq(skill.published, true)))
-    .limit(1);
-  if (!row) return null;
-  const theirs = await db
-    .select({ platform: skill.platform })
-    .from(skill)
-    .where(and(eq(skill.userId, row.userId), eq(skill.published, true)));
-  // The account id is read to count with and goes no further than this line.
-  const { userId: _userId, authorName, authorSince, ...published } = row;
+async function authorCard(db: Db, userId: string, theirs: PublishedSkill[]): Promise<SkillAuthor | null> {
+  const [owner] = await db.select({ name: user.name, since: user.createdAt }).from(user).where(eq(user.id, userId)).limit(1);
+  if (!owner) return null;
   return {
-    ...published,
-    updatedAt: row.updatedAt.getTime(),
-    author: {
-      handle: handleFor(authorName),
-      name: authorName,
-      joinedAt: authorSince.getTime(),
-      skills: theirs.length,
-      platforms: [...new Set(theirs.map((s) => s.platform))].sort(),
-    },
+    handle: await ensureHandle(db, userId),
+    name: owner.name,
+    joinedAt: owner.since.getTime(),
+    skills: theirs.length,
+    platforms: [...new Set(theirs.map((s) => s.platform))].sort(),
+    runs: theirs.reduce((sum, s) => sum + s.runs, 0),
   };
+}
+
+async function publishedBy(db: Db, userId: string): Promise<PublishedSkill[]> {
+  const rows = await db.select(PUBLIC_COLUMNS).from(skill).where(and(eq(skill.userId, userId), eq(skill.published, true)));
+  return ranked(await published(db, rows));
+}
+
+/** One published skill by id, with its author's card, or null — unpublished
+ *  and unknown look the same from outside, on purpose. */
+export async function publishedSkill(db: Db, id: string): Promise<PublishedSkill | null> {
+  const [row] = await db.select(PUBLIC_COLUMNS).from(skill).where(and(eq(skill.id, id), eq(skill.published, true))).limit(1);
+  if (!row) return null;
+  const theirs = await publishedBy(db, row.userId);
+  const author = await authorCard(db, row.userId, theirs);
+  const mine = theirs.find((s) => s.id === id);
+  return mine && author ? { ...mine, author } : null;
+}
+
+/** An author's public page: their card and what they have published. Null
+ *  for an unknown handle AND for an account that has published nothing — a
+ *  person who only signed up has no public page. */
+export async function publishedAuthor(
+  db: Db,
+  handle: string,
+): Promise<{ author: SkillAuthor; skills: PublishedSkill[] } | null> {
+  const [owner] = await db.select({ userId: profile.userId }).from(profile).where(eq(profile.handle, handle.toLowerCase())).limit(1);
+  if (!owner) return null;
+  const skills = await publishedBy(db, owner.userId);
+  if (skills.length === 0) return null;
+  const author = await authorCard(db, owner.userId, skills);
+  return author ? { author, skills } : null;
+}
+
+/**
+ * Someone ran a published skill. Counted once per skill, visitor and day, and
+ * never for the author — a registry ranked by its authors' own reloads is
+ * ranked by nothing. False when there is no such published skill.
+ */
+export async function countRun(
+  db: Db,
+  id: string,
+  visitor: string,
+  day: string,
+  viewerId: string | null,
+): Promise<{ counted: boolean; runs: number } | null> {
+  const [row] = await db.select({ userId: skill.userId }).from(skill).where(and(eq(skill.id, id), eq(skill.published, true))).limit(1);
+  if (!row) return null;
+  let counted = false;
+  if (row.userId !== viewerId) {
+    const inserted = await db.insert(skillRun).values({ skillId: id, visitor, day }).onConflictDoNothing().returning();
+    counted = inserted.length > 0;
+  }
+  return { counted, runs: (await runCounts(db, [id])).get(id) ?? 0 };
 }
 
 /** The store's mark_ran, for the registry copy. False when no such row.

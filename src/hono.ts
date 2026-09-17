@@ -35,7 +35,7 @@ export function createApp(auth: AuthLike, origins: string[], db: Db) {
     cors({
       origin: origins,
       allowHeaders: ["Content-Type", "Authorization"],
-      allowMethods: ["POST", "GET", "DELETE", "OPTIONS"],
+      allowMethods: ["POST", "GET", "PUT", "DELETE", "OPTIONS"],
       exposeHeaders: ["Content-Length"],
       maxAge: 600,
       credentials: true,
@@ -54,7 +54,7 @@ export function createApp(auth: AuthLike, origins: string[], db: Db) {
 
   // The public registry has no session and must be mounted BEFORE the
   // account routes, whose guard answers 401 for every /api path it sees.
-  app.route("/api", registryRoutes(db));
+  app.route("/api", registryRoutes(db, auth));
 
   // Registered after the handlers above so their terminating responses win;
   // this sub-app's session guard only ever runs for its own paths.

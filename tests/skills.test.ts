@@ -10,7 +10,8 @@ import { beforeAll, expect, test } from "bun:test";
 import { eq } from "drizzle-orm";
 
 import { ORIGIN, makeApp, signUp } from "./harness.js";
-import { MAX_SKILL_CHARS, handleFor } from "../src/registry.js";
+import { handleFor } from "../src/handles.js";
+import { MAX_SKILL_CHARS } from "../src/registry.js";
 import { skill } from "../src/app-schema.js";
 
 let app: Awaited<ReturnType<typeof makeApp>>["app"];
@@ -175,7 +176,8 @@ test("a successful run publishes by default; only a proven skill can be listed; 
   // No account id leaks onto the public page.
   // The row's own id is public — it is what a share link addresses — and the
   // account's never is.
-  expect(Object.keys(body.platforms[0].skills[0]).sort()).toEqual(["code", "description", "id", "name", "platform", "updatedAt"]);
+  expect(Object.keys(body.platforms[0].skills[0]).sort()).toEqual(["author", "code", "description", "id", "name", "platform", "runs", "updatedAt"]);
+  expect(body.platforms[0].skills[0].author).toEqual({ handle: "test" });
   const id = body.platforms[0].skills[0].id as string;
   const one = await app.request(`/api/registry/skills/${id}`, { headers: { Origin: ORIGIN } });
   expect(one.status).toBe(200);
@@ -184,9 +186,9 @@ test("a successful run publishes by default; only a proven skill can be listed; 
   // One skill's page names its author: the name they signed up with, a handle
   // made from it, and what they have done in public. Never the email, never
   // the account id — by key or by value.
-  expect(Object.keys(shown.author).sort()).toEqual(["handle", "joinedAt", "name", "platforms", "skills"]);
+  expect(Object.keys(shown.author).sort()).toEqual(["handle", "joinedAt", "name", "platforms", "runs", "skills"]);
   expect(shown.author.handle).toBe(handleFor(shown.author.name));
-  expect(shown.author).toMatchObject({ skills: 1, platforms: ["roarm_m2"] });
+  expect(shown.author).toMatchObject({ skills: 1, platforms: ["roarm_m2"], runs: 0 });
   expect(Object.keys(shown)).not.toContain("userId");
   expect(JSON.stringify(shown)).not.toContain("@");
   expect((await app.request("/api/registry/skills/not-a-skill", { headers: { Origin: ORIGIN } })).status).toBe(404);
@@ -218,10 +220,63 @@ test("re-teaching still takes a skill down until it runs again — the automatic
   expect((await (await list("roarm_m2")).json()).skills.find((s: { name: string }) => s.name === "lift").published).toBe(true);
 });
 
-test("a handle is the first word of the name, and never empty", () => {
+test("a handle is the first word of the name, in ASCII, and never empty or reserved", () => {
   expect(handleFor("Saidev Dhal (Dev)")).toBe("saidev");
   expect(handleFor("  José  Núñez ")).toBe("jose");
-  expect(handleFor("李 雷")).toBe("李");
-  expect(handleFor("!!! ???")).toBe("someone");
-  expect(handleFor("")).toBe("someone");
+  // Too short, not ASCII, nothing usable, or a word we keep for ourselves.
+  for (const name of ["Al B", "李 雷", "!!! ???", "", "Admin Person"]) expect(handleFor(name)).toBe("maker");
+});
+
+test("handles are unique, changeable, and an author page lists what they published", async () => {
+  // Two accounts with the same name cannot share a handle.
+  const second = await signUp(app, "second@example.com");
+  const mine = await (await app.request("/api/profile", { headers: { Cookie: cookie, Origin: ORIGIN } })).json();
+  const theirs = await (await app.request("/api/profile", { headers: { Cookie: second, Origin: ORIGIN } })).json();
+  expect(mine.handle).toBe("test");
+  expect(theirs.handle).toBe("test2");
+
+  const put = (as: string, handle: string) =>
+    app.request("/api/profile", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", Cookie: as, Origin: ORIGIN },
+      body: JSON.stringify({ handle }),
+    });
+  expect((await put(second, "test")).status).toBe(409);
+  expect((await put(second, "admin")).status).toBe(400);
+  expect((await put(second, "No Spaces!")).status).toBe(400);
+  expect(await (await put(second, "@Robo_Fan")).json()).toEqual({ handle: "robo_fan" });
+
+  // The page exists for someone who has published, and only for them.
+  const page = await app.request("/api/registry/authors/test", { headers: { Origin: ORIGIN } });
+  expect(page.status).toBe(200);
+  const shown = await page.json();
+  expect(shown.author).toMatchObject({ handle: "test", name: "Test Owner" });
+  expect(shown.skills.length).toBe(shown.author.skills);
+  expect(JSON.stringify(shown)).not.toContain("example.com");
+  expect((await app.request("/api/registry/authors/robo_fan", { headers: { Origin: ORIGIN } })).status).toBe(404);
+  expect((await app.request("/api/registry/authors/nobody", { headers: { Origin: ORIGIN } })).status).toBe(404);
+});
+
+test("runs by other people rank the registry; reloads and the author's own runs do not count", async () => {
+  const list = async () =>
+    (await (await app.request("/api/registry?platform=roarm_m2", { headers: { Origin: ORIGIN } })).json()).platforms[0].skills as {
+      id: string; name: string; runs: number;
+    }[];
+  const before = await list();
+  expect(before.length).toBeGreaterThan(1);
+  const last = before[before.length - 1];
+  const ran = (headers: Record<string, string>) =>
+    app.request(`/api/registry/skills/${last.id}/ran`, { method: "POST", headers: { Origin: ORIGIN, ...headers } });
+
+  // The author pressing Run on their own skill is not a vote.
+  expect(await (await ran({ Cookie: cookie })).json()).toEqual({ counted: false, runs: 0 });
+  // A stranger is, once a day, however often they reload.
+  expect(await (await ran({ "x-forwarded-for": "203.0.113.7", "user-agent": "a" })).json()).toEqual({ counted: true, runs: 1 });
+  expect(await (await ran({ "x-forwarded-for": "203.0.113.7", "user-agent": "a" })).json()).toEqual({ counted: false, runs: 1 });
+  expect(await (await ran({ "x-forwarded-for": "203.0.113.8", "user-agent": "a" })).json()).toEqual({ counted: true, runs: 2 });
+
+  // The least recent skill is now first: it is the one people run.
+  const after = await list();
+  expect(after[0]).toMatchObject({ id: last.id, runs: 2 });
+  expect((await app.request("/api/registry/skills/nope/ran", { method: "POST", headers: { Origin: ORIGIN } })).status).toBe(404);
 });
