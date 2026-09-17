@@ -367,3 +367,64 @@ export const modelKey = pgTable("model_key", {
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
+
+/**
+ * One run of a skill, kept tick by tick as training data (the runtime's
+ * botcortex/episodes.py). From a paired robot whose owner chose to share runs,
+ * or from a signed-in browser tab.
+ *
+ * What is asked of this table is analysis across every robot and every body:
+ * which skills fail, how, on what, and what repaired them. So everything worth
+ * filtering on is a column. The trajectory itself (joint states, commanded
+ * actions and object poses per control tick) is only ever read whole, so it is
+ * stored as gzipped JSON, base64 in `ticks_gz`: about 12 KB an episode where
+ * jsonb would be nearer 80. Images are never sent; in simulation they are a
+ * function of the ticks and are rendered from them later.
+ *
+ * A failed episode and the run that repaired it name each other (`repairs`,
+ * `repaired_by`), and both carry the skill's source as it stood: the pair is a
+ * failure, the fix and the success on one task.
+ *
+ * The id is the runtime's, unique per account, not globally: two robots may
+ * mint the same millisecond.
+ */
+export const episode = pgTable(
+  "episode",
+  {
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    id: text("id").notNull(),
+    source: text("source").notNull(), // "robot" | "browser"
+    platform: text("platform").notNull(),
+    backend: text("backend").notNull(),
+    skill: text("skill"),
+    instruction: text("instruction"),
+    phase: text("phase"),
+    executed: boolean("executed").notNull().default(false),
+    ok: boolean("ok").notNull(),
+    kind: text("kind"),
+    primitive: text("primitive"),
+    note: text("note"),
+    codeSha: text("code_sha"),
+    code: text("code"),
+    failureId: text("failure_id"),
+    repairs: jsonb("repairs").$type<string[]>().notNull().default([]),
+    repairedBy: text("repaired_by"),
+    replays: text("replays"),
+    length: integer("length").notNull(),
+    fps: integer("fps").notNull(),
+    /** Everything about the run that is not worth a column: params, the
+     *  variation tried, joint and object names, the scene before and after. */
+    detail: jsonb("detail").$type<Record<string, unknown>>().notNull().default({}),
+    ticksGz: text("ticks_gz").notNull(),
+    recordedAt: timestamp("recorded_at"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.userId, t.id] }),
+    index("episode_platform_skill_idx").on(t.platform, t.skill),
+    index("episode_outcome_idx").on(t.ok, t.kind),
+    index("episode_created_idx").on(t.createdAt),
+  ],
+);

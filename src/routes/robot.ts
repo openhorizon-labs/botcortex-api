@@ -9,6 +9,7 @@
  *   POST /v1/chat/completions   OpenAI-shaped   (client base_url = <api>/v1)
  *   POST /v1/messages           Anthropic-shaped (client base_url = <api>)
  *   POST /v1/skills             skill sync
+ *   POST /v1/episodes           runs kept as training data (owner opt-in)
  *   POST /v1/robots/register    a paired robot announcing itself
  *   GET  /v1/me                 who this key belongs to + remaining credit
  *
@@ -33,6 +34,7 @@ import {
 import { meteredProxy } from "../inference.js";
 import { keyFromRequest, resolveKey, sha256, type ResolvedKey } from "../keys.js";
 import { ALLOWED_MODELS, type Provider } from "../pricing.js";
+import { recordEvent } from "../episodes.js";
 import { upsertSkill } from "../registry.js";
 import { rankByMeaning, readQuestion } from "../similarity.js";
 import { robot, skill } from "../app-schema.js";
@@ -92,6 +94,15 @@ export function robotRoutes(db: Db) {
     const result = await upsertSkill(db, c.get("key").userId, await c.req.json().catch(() => null));
     if (!result.ok) return c.json({ error: result.error }, result.status);
     return c.json({ ok: true, name: result.name });
+  });
+
+  /** Runs kept as training data, from a robot whose owner chose to share them
+   *  (BOTCORTEX_SHARE_RUNS). Best-effort by contract, like skill sync: the
+   *  runtime queues these off the run's thread and drops what does not land. */
+  app.post("/episodes", async (c) => {
+    const result = await recordEvent(db, c.get("key").userId, "robot", await c.req.json().catch(() => null));
+    if (!result.ok) return c.json({ error: result.error }, result.status);
+    return c.json({ ok: true, id: result.id });
   });
 
   /** Forget a skill — the registry copy only; the robot deletes its own file.

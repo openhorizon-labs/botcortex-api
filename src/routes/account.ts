@@ -27,6 +27,7 @@ import { rankByMeaning, readQuestion } from "../similarity.js";
 import { shortTitle } from "../titles.js";
 import { mintKey } from "../keys.js";
 import { ALLOWED_MODELS, DEFAULT_MODEL, catalogue } from "../pricing.js";
+import { recordEvent, summarise } from "../episodes.js";
 import { UNKNOWN_PLATFORM, listSkills, markSkillRan, setPublished, upsertSkill } from "../registry.js";
 import { conversation, message, robot, robotKey } from "../app-schema.js";
 
@@ -92,6 +93,17 @@ export function accountRoutes(auth: AuthLike, db: Db) {
     if (!result.ok) return c.json({ error: result.error }, result.status);
     return c.json({ ok: true, name: result.name });
   });
+
+  /** Runs from the browser sim, kept as training data. The tab has no disk,
+   *  so this is the only place they go. Same write as a robot's (episodes.ts). */
+  app.post("/episodes", async (c) => {
+    const result = await recordEvent(db, c.get("userId"), "browser", await c.req.json().catch(() => null));
+    if (!result.ok) return c.json({ error: result.error }, result.status);
+    return c.json({ ok: true, id: result.id });
+  });
+
+  /** What this account's runs add up to. */
+  app.get("/episodes/summary", async (c) => c.json(await summarise(db, c.get("userId"))));
 
   /** The other direction: what the browser sim reads at boot to rebuild
    *  its local store. `?platform=` narrows to one body, which is how the
