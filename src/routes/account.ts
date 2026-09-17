@@ -21,6 +21,7 @@ import {
   grant,
 } from "../credits.js";
 import { HANDLE_MESSAGES, handleAvailability, readProfile, updateProfile, type ProfileChange } from "../handles.js";
+import { describeOwnKey, removeOwnKey, saveOwnKey } from "../byok.js";
 import { meteredProxy } from "../inference.js";
 import { mintKey } from "../keys.js";
 import { ALLOWED_MODELS, DEFAULT_MODEL, catalogue } from "../pricing.js";
@@ -396,8 +397,11 @@ export function accountRoutes(auth: AuthLike, db: Db) {
    *  table the proxy bills from, so the price shown is the price charged. */
   app.get("/models", async (c) => {
     const balance = await balanceFor(db, c.get("userId"));
+    // With their own OpenAI key every model is theirs to pick: what it costs is
+    // between them and OpenAI, and our balance has no say in it.
+    const own = await describeOwnKey(db, c.get("userId"));
     return c.json({
-      models: catalogue(balance.balanceMicros),
+      models: catalogue(own?.provider === "openai" ? Number.MAX_SAFE_INTEGER : balance.balanceMicros),
       default: DEFAULT_MODEL,
       balanceMicros: balance.balanceMicros,
     });
@@ -420,6 +424,23 @@ export function accountRoutes(auth: AuthLike, db: Db) {
     const problem = await updateProfile(db, c.get("userId"), body);
     if (problem) return c.json(problem, problem.code === "taken" ? 409 : 400);
     return c.json(await readProfile(db, c.get("userId")));
+  });
+
+  // --- the owner's own model key -------------------------------------------
+  // In, never out: GET says which provider and the last four characters.
+
+  app.get("/model-key", async (c) => c.json({ key: await describeOwnKey(db, c.get("userId")) }));
+
+  app.put("/model-key", async (c) => {
+    const body = (await c.req.json().catch(() => null)) as { key?: unknown } | null;
+    const outcome = await saveOwnKey(db, c.get("userId"), body?.key);
+    if (!outcome.ok) return c.json({ error: outcome.error }, outcome.status);
+    return c.json({ key: outcome.key, verified: outcome.verified });
+  });
+
+  app.delete("/model-key", async (c) => {
+    await removeOwnKey(db, c.get("userId"));
+    return c.json({ key: null });
   });
 
   app.get("/credits", async (c) => {

@@ -12,6 +12,8 @@
  * allowlist, the provider match, the balance ceiling — is here, once. Two
  * copies of a billing gate is how one of them quietly stops charging.
  */
+import { anthropicChat } from "./anthropic-chat.js";
+import { readOwnKey, type OwnKey } from "./byok.js";
 import type { Db } from "./db.js";
 import { balanceFor, formatMicrosPrecise, recordUsage } from "./credits.js";
 import { ALLOWED_MODELS, costMicros, priceFor, worstCaseMicros, type Provider } from "./pricing.js";
@@ -112,6 +114,67 @@ function fail(status: number, type: string, message: string): Response {
 }
 
 /**
+ * One call, paid for by the owner's own key. Null when their key cannot serve
+ * this door (an OpenAI key asked for a native Anthropic call), in which case
+ * the caller carries on to the credit path.
+ *
+ * `door` is the wire format the caller spoke: "openai" is chat completions
+ * (the browser's agent loop), "anthropic" is the Messages API (the runtime's
+ * tool runner). An Anthropic key behind the chat-completions door is
+ * translated — see anthropic-chat.ts.
+ */
+async function withOwnKey(
+  db: Db,
+  caller: Caller,
+  own: OwnKey,
+  door: Provider,
+  body: any,
+  request: Request,
+): Promise<Response | null> {
+  if (own.provider === "anthropic" && door === "openai") {
+    const response = await anthropicChat(own.secret, body);
+    if (response.ok) await noteOwnUsage(db, caller, await response.clone().json(), "openai");
+    return response;
+  }
+  if (own.provider !== door) return null;
+
+  const upstream = await fetch(upstreamFor(door), {
+    method: "POST",
+    headers: upstreamHeaders(door, request.headers, own.secret),
+    body: JSON.stringify(body),
+  });
+  if (body.stream && upstream.ok && upstream.body) {
+    return new Response(upstream.body, {
+      status: upstream.status,
+      headers: { "content-type": upstream.headers.get("content-type") ?? "text/event-stream", "cache-control": "no-cache" },
+    });
+  }
+  const text = await upstream.text();
+  if (upstream.ok) {
+    try {
+      await noteOwnUsage(db, caller, JSON.parse(text), door);
+    } catch {
+      /* a reply we cannot read is still the owner's reply */
+    }
+  }
+  return new Response(text, { status: upstream.status, headers: { "content-type": "application/json" } });
+}
+
+/** What was used, at no cost to the account: their provider bills them. Kept so
+ *  the activity is visible alongside credit-paid calls, never so it can be charged. */
+async function noteOwnUsage(db: Db, caller: Caller, data: any, shape: Provider) {
+  const { inputTokens, outputTokens } = tokensFrom(data, shape);
+  await recordUsage(db, {
+    userId: caller.userId,
+    keyId: caller.keyId,
+    model: typeof data?.model === "string" ? data.model : "own-key",
+    inputTokens,
+    outputTokens,
+    costMicros: 0,
+  });
+}
+
+/**
  * Forward one call to a vendor and bill it, or explain why not.
  *
  * Returns a Response rather than taking a Hono context, so it does not care
@@ -127,6 +190,16 @@ export async function meteredProxy(
   const body = await request.json().catch(() => null);
   if (!body || typeof body.model !== "string") {
     return fail(400, "invalid_request_error", "Body must include a model.");
+  }
+
+  // An owner who brought their own key is not spending our credit, so none of
+  // what follows applies to them: not the balance gate, not the price table,
+  // not the model allowlist (which exists only because an unpriced model would
+  // meter to zero). Their provider bills them and enforces its own limits.
+  const own = await readOwnKey(db, caller.userId);
+  if (own) {
+    const served = await withOwnKey(db, caller, own, provider, body, request);
+    if (served) return served;
   }
 
   const price = priceFor(body.model);

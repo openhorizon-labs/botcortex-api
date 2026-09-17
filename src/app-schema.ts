@@ -347,3 +347,23 @@ export const skillRun = pgTable(
   },
   (t) => [primaryKey({ columns: [t.skillId, t.visitor, t.day] })],
 );
+
+/**
+ * An owner's own model key (OpenAI or Anthropic), so teaching is paid for on
+ * their account with the provider and not from BotCortex credit.
+ *
+ * Encrypted at rest (AES-256-GCM, see src/byok.ts) and used only inside the
+ * inference proxy. Nothing ever sends it back: the app is shown which provider
+ * it is for and its last four characters. One per account — a key is a way to
+ * pay, and there is one way to pay at a time.
+ */
+export const modelKey = pgTable("model_key", {
+  userId: text("user_id")
+    .primaryKey()
+    .references(() => user.id, { onDelete: "cascade" }),
+  provider: text("provider").notNull(),
+  ciphertext: text("ciphertext").notNull(),
+  last4: text("last4").notNull(),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
