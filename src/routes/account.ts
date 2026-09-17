@@ -23,6 +23,7 @@ import {
 import { HANDLE_MESSAGES, handleAvailability, readProfile, updateProfile, type ProfileChange } from "../handles.js";
 import { describeOwnKey, removeOwnKey, saveOwnKey } from "../byok.js";
 import { meteredProxy } from "../inference.js";
+import { shortTitle } from "../titles.js";
 import { mintKey } from "../keys.js";
 import { ALLOWED_MODELS, DEFAULT_MODEL, catalogue } from "../pricing.js";
 import { UNKNOWN_PLATFORM, listSkills, markSkillRan, setPublished, upsertSkill } from "../registry.js";
@@ -248,6 +249,39 @@ export function accountRoutes(auth: AuthLike, db: Db) {
     return c.json({ id, platform }, 201);
   });
 
+  /**
+   * Shorten a long first message into a title — see titles.ts for why this is
+   * a shortening and not a rewrite. Asked for by the app AFTER the message is
+   * stored, so sending is never slowed by it. Replaces only the automatic
+   * title (the first sixty characters of the owner's message): a title that
+   * is already something else is left alone, so this is safe to call twice.
+   */
+  app.post("/conversations/:id/title", async (c) => {
+    const userId = c.get("userId");
+    const id = c.req.param("id");
+    const [row] = await db
+      .select({ title: conversation.title })
+      .from(conversation)
+      .where(and(eq(conversation.id, id), eq(conversation.userId, userId)))
+      .limit(1);
+    if (!row) return c.json({ error: "not found" }, 404);
+    const [first] = await db
+      .select({ text: message.text })
+      .from(message)
+      .where(and(eq(message.conversationId, id), eq(message.author, "you"), eq(message.kind, "text")))
+      .orderBy(message.seq)
+      .limit(1);
+    const automatic = first ? first.text.slice(0, 60).trim() : null;
+    if (!first || !automatic || row.title !== automatic) return c.json({ title: row.title, changed: false });
+    const title = await shortTitle(db, userId, first.text);
+    if (!title) return c.json({ title: row.title, changed: false });
+    await db
+      .update(conversation)
+      .set({ title })
+      .where(and(eq(conversation.id, id), eq(conversation.userId, userId), eq(conversation.title, automatic)));
+    return c.json({ title, changed: true });
+  });
+
   app.delete("/conversations/:id", async (c) => {
     // Scoped by owner: an id alone must never reach someone else's thread.
     const gone = await db
@@ -359,6 +393,9 @@ export function accountRoutes(auth: AuthLike, db: Db) {
     // row that had been paraphrased the same way. A task list is for
     // recognising your own work; the words you chose are what you will scan
     // for. It also cost a model call per conversation, on us.
+    //
+    // A LONG first message is shortened afterwards, in the owner's own words and
+    // at their cost, by POST /conversations/:id/title — see titles.ts.
     if (author === "you" && rowKind === "text") {
       await db
         .update(conversation)
