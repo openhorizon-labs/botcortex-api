@@ -20,7 +20,7 @@ import {
   formatMicrosUsed,
   grant,
 } from "../credits.js";
-import { ensureHandle, setHandle } from "../handles.js";
+import { HANDLE_MESSAGES, handleAvailability, readProfile, updateProfile, type ProfileChange } from "../handles.js";
 import { meteredProxy } from "../inference.js";
 import { mintKey } from "../keys.js";
 import { ALLOWED_MODELS, DEFAULT_MODEL, catalogue } from "../pricing.js";
@@ -403,19 +403,23 @@ export function accountRoutes(auth: AuthLike, db: Db) {
     });
   });
 
-  /** The handle skills are published under. Made on first ask. */
-  app.get("/profile", async (c) => c.json({ handle: await ensureHandle(db, c.get("userId")) }));
+  /** The public profile: handle, name, bio, avatar. Made on first ask, with
+   *  the name taken from sign-up and an avatar generated from a random seed. */
+  app.get("/profile", async (c) => c.json(await readProfile(db, c.get("userId"))));
 
+  /** "Is this username free?" — asked by the form while it is being typed. */
+  app.get("/profile/handle/:handle", async (c) => {
+    const problem = await handleAvailability(db, c.get("userId"), c.req.param("handle"));
+    return c.json(problem ? { available: false, code: problem, error: HANDLE_MESSAGES[problem] } : { available: true });
+  });
+
+  /** Change any part of it. Only what is sent is touched. */
   app.put("/profile", async (c) => {
-    const body = (await c.req.json().catch(() => null)) as { handle?: unknown } | null;
-    if (typeof body?.handle !== "string") return c.json({ error: "handle is required" }, 400);
-    const problem = await setHandle(db, c.get("userId"), body.handle);
-    if (problem === "taken") return c.json({ error: "That handle is taken.", code: problem }, 409);
-    if (problem === "reserved") return c.json({ error: "That handle is reserved.", code: problem }, 400);
-    if (problem === "invalid") {
-      return c.json({ error: "3 to 24 characters: lowercase letters, numbers and underscores.", code: problem }, 400);
-    }
-    return c.json({ handle: await ensureHandle(db, c.get("userId")) });
+    const body = (await c.req.json().catch(() => null)) as ProfileChange | null;
+    if (!body || typeof body !== "object") return c.json({ error: "a JSON object is required" }, 400);
+    const problem = await updateProfile(db, c.get("userId"), body);
+    if (problem) return c.json(problem, problem.code === "taken" ? 409 : 400);
+    return c.json(await readProfile(db, c.get("userId")));
   });
 
   app.get("/credits", async (c) => {

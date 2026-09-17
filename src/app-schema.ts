@@ -313,6 +313,16 @@ export const profile = pgTable("profile", {
     .primaryKey()
     .references(() => user.id, { onDelete: "cascade" }),
   handle: text("handle").notNull().unique(),
+  /** What the person wants to be called in public. Null until they say; the
+   *  sign-up name stands in until then. */
+  firstName: text("first_name"),
+  lastName: text("last_name"),
+  bio: text("bio"),
+  /** Seeds the generated avatar. Random, never derived from anything about
+   *  the person: it is sent to a third-party image service in a URL. */
+  avatarSeed: text("avatar_seed"),
+  /** When they filled in (or skipped) the profile step. Null = ask once. */
+  onboardedAt: timestamp("onboarded_at"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });

@@ -186,7 +186,7 @@ test("a successful run publishes by default; only a proven skill can be listed; 
   // One skill's page names its author: the name they signed up with, a handle
   // made from it, and what they have done in public. Never the email, never
   // the account id — by key or by value.
-  expect(Object.keys(shown.author).sort()).toEqual(["handle", "joinedAt", "name", "platforms", "runs", "skills"]);
+  expect(Object.keys(shown.author).sort()).toEqual(["avatar", "bio", "handle", "joinedAt", "name", "platforms", "runs", "skills"]);
   expect(shown.author.handle).toBe(handleFor(shown.author.name));
   expect(shown.author).toMatchObject({ skills: 1, platforms: ["roarm_m2"], runs: 0 });
   expect(Object.keys(shown)).not.toContain("userId");
@@ -234,6 +234,11 @@ test("handles are unique, changeable, and an author page lists what they publish
   const theirs = await (await app.request("/api/profile", { headers: { Cookie: second, Origin: ORIGIN } })).json();
   expect(mine.handle).toBe("test");
   expect(theirs.handle).toBe("test2");
+  // A new profile starts from the sign-up name, has not been asked yet, and
+  // already has a generated avatar whose URL says nothing about the person.
+  expect(theirs).toMatchObject({ firstName: "Test", lastName: "Owner", bio: "", onboarded: false });
+  expect(theirs.avatar).toMatch(/^https:\/\/api\.dicebear\.com\/9\.x\/bottts-neutral\/svg\?seed=[0-9a-f]{16}$/);
+  expect(theirs.avatar).not.toMatch(/test|owner|second|example/i);
 
   const put = (as: string, handle: string) =>
     app.request("/api/profile", {
@@ -244,7 +249,7 @@ test("handles are unique, changeable, and an author page lists what they publish
   expect((await put(second, "test")).status).toBe(409);
   expect((await put(second, "admin")).status).toBe(400);
   expect((await put(second, "No Spaces!")).status).toBe(400);
-  expect(await (await put(second, "@Robo_Fan")).json()).toEqual({ handle: "robo_fan" });
+  expect(await (await put(second, "@Robo_Fan")).json()).toMatchObject({ handle: "robo_fan" });
 
   // The page exists for someone who has published, and only for them.
   const page = await app.request("/api/registry/authors/test", { headers: { Origin: ORIGIN } });
@@ -279,4 +284,60 @@ test("runs by other people rank the registry; reloads and the author's own runs 
   const after = await list();
   expect(after[0]).toMatchObject({ id: last.id, runs: 2 });
   expect((await app.request("/api/registry/skills/nope/ran", { method: "POST", headers: { Origin: ORIGIN } })).status).toBe(404);
+});
+
+test("the profile step: names, a bio, a reshuffled avatar, asked once", async () => {
+  const me = await signUp(app, "profile@example.com");
+  const put = (body: unknown) =>
+    app.request("/api/profile", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", Cookie: me, Origin: ORIGIN },
+      body: JSON.stringify(body),
+    });
+  const before = await (await app.request("/api/profile", { headers: { Cookie: me, Origin: ORIGIN } })).json();
+
+  // While typing: someone else's username is taken, a reserved word is
+  // reserved, your own is yours, and a free one is free.
+  const free = async (handle: string) =>
+    (await app.request(`/api/profile/handle/${encodeURIComponent(handle)}`, { headers: { Cookie: me, Origin: ORIGIN } })).json();
+  expect(await free("test")).toEqual({ available: false, code: "taken", error: "That username is taken." });
+  expect(await free("TEST")).toMatchObject({ available: false, code: "taken" });
+  expect(await free("admin")).toMatchObject({ available: false, code: "reserved" });
+  expect(await free("a b")).toMatchObject({ available: false, code: "invalid" });
+  expect(await free(before.handle)).toEqual({ available: true });
+  expect(await free("ada_l")).toEqual({ available: true });
+  expect((await app.request("/api/profile/handle/ada_l", { headers: { Origin: ORIGIN } })).status).toBe(401);
+
+  // Refusals name the field, so the form can put the message beside it.
+  expect(await (await put({ firstName: "  " })).json()).toMatchObject({ field: "firstName" });
+  expect(await (await put({ bio: "x".repeat(161) })).json()).toMatchObject({ field: "bio" });
+  expect((await put({ handle: "test", firstName: "Ada" })).status).toBe(409);
+
+  const saved = await (
+    await put({ handle: "ada_l", firstName: " Ada ", lastName: "Lovelace", bio: "Teaches an SO-101\nto sort blocks.", done: true })
+  ).json();
+  expect(saved).toMatchObject({
+    handle: "ada_l", firstName: "Ada", lastName: "Lovelace", bio: "Teaches an SO-101 to sort blocks.", onboarded: true,
+  });
+  expect(saved.avatar).toBe(before.avatar);
+
+  const shuffled = await (await put({ shuffleAvatar: true })).json();
+  expect(shuffled.avatar).not.toBe(before.avatar);
+  expect(shuffled).toMatchObject({ firstName: "Ada", bio: "Teaches an SO-101 to sort blocks." });
+
+  // The account's own name follows, so the app and the skill page agree.
+  const session = await (await app.request("/api/me", { headers: { Cookie: me, Origin: ORIGIN } })).json();
+  expect(session.user.name).toBe("Ada Lovelace");
+
+  // Skipping is also an answer: asked once, either way.
+  const skipper = await signUp(app, "skipper@example.com");
+  const skipped = await app.request("/api/profile", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", Cookie: skipper, Origin: ORIGIN },
+    body: JSON.stringify({ done: true }),
+  });
+  const left = await skipped.json();
+  expect(left).toMatchObject({ onboarded: true, firstName: "Test", lastName: "Owner" });
+  // Whichever "test<n>" was free: the handle still exists, made from the name.
+  expect(left.handle).toMatch(/^test\d*$/);
 });

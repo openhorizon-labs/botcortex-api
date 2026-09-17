@@ -15,7 +15,7 @@ import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 
 import { profile, skill, skillRun } from "./app-schema.js";
 import { user } from "./auth-schema.js";
-import { ensureHandle } from "./handles.js";
+import { ensureHandle, readProfile } from "./handles.js";
 import type { Db } from "./db.js";
 
 /** Roughly a long authored skill plus its metadata. */
@@ -38,6 +38,10 @@ export type SkillUpsert =
 export type SkillAuthor = {
   handle: string;
   name: string;
+  /** A line about them, in their words. Empty until they write one. */
+  bio: string;
+  /** A generated avatar's URL. */
+  avatar: string;
   /** Milliseconds since the epoch. */
   joinedAt: number;
   /** How many skills they have on the public registry. */
@@ -218,9 +222,12 @@ export async function publishedSkills(db: Db, platform?: string): Promise<Publis
 async function authorCard(db: Db, userId: string, theirs: PublishedSkill[]): Promise<SkillAuthor | null> {
   const [owner] = await db.select({ name: user.name, since: user.createdAt }).from(user).where(eq(user.id, userId)).limit(1);
   if (!owner) return null;
+  const about = await readProfile(db, userId);
   return {
-    handle: await ensureHandle(db, userId),
-    name: owner.name,
+    handle: about.handle,
+    name: [about.firstName, about.lastName].filter(Boolean).join(" ") || owner.name,
+    bio: about.bio,
+    avatar: about.avatar,
     joinedAt: owner.since.getTime(),
     skills: theirs.length,
     platforms: [...new Set(theirs.map((s) => s.platform))].sort(),
