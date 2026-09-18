@@ -396,3 +396,41 @@ test("one visitor cannot vote for the whole registry in a day", async () => {
   expect((await countRun(db, ids[3], "visitor-b", "2026-09-17", null, 3))!.counted).toBe(true);
   expect((await countRun(db, ids[3], "visitor-a", "2026-09-18", null, 3))!.counted).toBe(true);
 });
+
+test("the owner can delete a draft, and only a draft", async () => {
+  // Task 3397c007 left a skill on the registry that had done nothing; the
+  // sidebar now offers Delete for skills that never ran. A proven one is
+  // published, and taking it down stays the paid capability.
+  const res = await push({
+    name: "half_idea",
+    description: "A draft.",
+    code: "def run(ctx): pass",
+    platform: "openarm_v1",
+  });
+  expect(res.status).toBe(200);
+
+  const wrongBody = await app.request("/api/skills/half_idea?platform=panda", {
+    method: "DELETE",
+    headers: { Cookie: cookie, Origin: ORIGIN },
+  });
+  expect(wrongBody.status).toBe(404);
+
+  const gone = await app.request("/api/skills/half_idea?platform=openarm_v1", {
+    method: "DELETE",
+    headers: { Cookie: cookie, Origin: ORIGIN },
+  });
+  expect(gone.status).toBe(200);
+  expect(await db.select().from(skill).where(eq(skill.name, "half_idea"))).toHaveLength(0);
+
+  await push({ name: "works", description: "Works.", code: "def run(ctx): pass", platform: "openarm_v1", proven: true });
+  const refused = await app.request("/api/skills/works?platform=openarm_v1", {
+    method: "DELETE",
+    headers: { Cookie: cookie, Origin: ORIGIN },
+  });
+  expect(refused.status).toBe(409);
+  expect((await refused.json()).code).toBe("published_skill");
+  expect(await db.select().from(skill).where(eq(skill.name, "works"))).toHaveLength(1);
+
+  const nobody = await app.request("/api/skills/works?platform=openarm_v1", { method: "DELETE", headers: { Origin: ORIGIN } });
+  expect(nobody.status).toBe(401);
+});

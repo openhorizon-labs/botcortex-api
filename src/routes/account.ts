@@ -28,7 +28,7 @@ import { shortTitle } from "../titles.js";
 import { mintKey } from "../keys.js";
 import { ALLOWED_MODELS, DEFAULT_MODEL, catalogue } from "../pricing.js";
 import { recordEvent, summarise } from "../episodes.js";
-import { UNKNOWN_PLATFORM, listSkills, markSkillRan, setPublished, upsertSkill } from "../registry.js";
+import { UNKNOWN_PLATFORM, forgetSkill, listSkills, markSkillRan, setPublished, upsertSkill } from "../registry.js";
 import { conversation, message, robot, robotKey } from "../app-schema.js";
 
 type Env = { Variables: { userId: string } };
@@ -154,6 +154,26 @@ export function accountRoutes(auth: AuthLike, db: Db) {
   app.post("/credits/welcome/seen", async (c) => {
     await markWelcomeSeen(db, c.get("userId"));
     return c.json({ ok: true });
+  });
+
+  /** The sidebar's Delete, for a skill that never ran successfully. A proven
+   *  or published one answers 409 with the reason — the same reason the
+   *  publish route gives for taking a skill down. */
+  app.delete("/skills/:name", async (c) => {
+    const platform = c.req.query("platform") || UNKNOWN_PLATFORM;
+    const name = c.req.param("name");
+    const outcome = await forgetSkill(db, c.get("userId"), platform, name);
+    if (outcome === "missing") return c.json({ error: `no skill named ${name} for ${platform} in this account` }, 404);
+    if (outcome === "published") {
+      return c.json(
+        {
+          error: `${name} has been seen to work and is on the public registry, so it cannot be deleted. Only skills that never ran successfully can go.`,
+          code: "published_skill",
+        },
+        409,
+      );
+    }
+    return c.json({ ok: true, name });
   });
 
   app.post("/skills/:name/ran", async (c) => {

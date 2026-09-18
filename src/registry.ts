@@ -300,6 +300,22 @@ export async function countRun(
  *  A skill seen to run is published in the same stroke: every successful
  *  skill, on any robot, by any owner, is on the public registry unless
  *  its owner takes it down. */
+export type ForgetOutcome = "deleted" | "missing" | "published";
+
+/** The owner deleting a draft from the sidebar. Only a skill that has never
+ *  been seen to work can go: a proven one is on the public registry, and
+ *  taking one down is the paid capability setPublished already refuses — a
+ *  delete that got around that would be the same withdrawal under another
+ *  name. Same rule as the runtime's RobotSession.forget_skill. */
+export async function forgetSkill(db: Db, userId: string, platform: string, name: string): Promise<ForgetOutcome> {
+  const where = and(eq(skill.userId, userId), eq(skill.platform, platform), eq(skill.name, name));
+  const [row] = await db.select({ proven: skill.proven, published: skill.published }).from(skill).where(where).limit(1);
+  if (!row) return "missing";
+  if (row.proven || row.published) return "published";
+  await db.delete(skill).where(where);
+  return "deleted";
+}
+
 export async function markSkillRan(db: Db, userId: string, platform: string, name: string): Promise<boolean> {
   const rows = await db
     .update(skill)
